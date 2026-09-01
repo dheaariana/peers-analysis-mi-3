@@ -5,199 +5,263 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import requests
 import streamlit as st
-import trafilatura
 from ddgs import DDGS
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
-st.set_page_config(page_title="PEARL MI3", page_icon="◈", layout="wide")
-
+st.set_page_config(page_title="PEARL MI3 Dynamic", page_icon="◈", layout="wide")
 st.markdown("""
 <style>
-.stApp {background:#f4f7fb;color:#172033}.block-container{max-width:1280px;padding-top:1.5rem}
-.hero{background:linear-gradient(120deg,#082b5c,#0b4d8f);padding:28px 32px;border-radius:18px;color:white;margin-bottom:18px}
-.hero h1{margin:0;font-size:2.15rem}.hero p{margin:.45rem 0 0;color:#d9e9ff}
-.badge{display:inline-block;padding:4px 10px;border-radius:999px;background:#e7f1ff;color:#0b4d8f;font-weight:700;font-size:.78rem}
-[data-testid="stMetric"]{background:white;border:1px solid #e1e8f2;padding:12px;border-radius:14px}
+.stApp{background:#f4f7fb;color:#172033}.block-container{max-width:1280px;padding-top:1.4rem}
+.hero{background:linear-gradient(120deg,#082b5c,#0b559d);padding:26px 30px;border-radius:18px;color:white;margin-bottom:18px}
+.hero h1{margin:6px 0;font-size:2.1rem}.hero p{margin:0;color:#dcecff}
+.tag{display:inline-block;padding:4px 10px;border-radius:999px;background:#e6f1ff;color:#0b4d8f;font-weight:750;font-size:.78rem}
+[data-testid="stMetric"]{background:#fff;border:1px solid #dfe7f1;padding:12px;border-radius:14px}
 </style>
 """, unsafe_allow_html=True)
 
-SECTOR_RULES = {
+TAXONOMY = {
     "Mining & Energy": {
-        "Mining Contractor": ["mining contractor", "mining services", "contract mining", "overburden", "drilling", "blasting", "coal hauling"],
-        "Coal Owner/Producer": ["coal producer", "coal concession", "coal reserves", "thermal coal", "coal production"],
-        "Power & Renewable Energy": ["power generation", "electricity", "renewable energy", "geothermal", "solar power", "hydropower"]},
+        "Mining Contractor": ["mining contractor","mining services","contract mining","overburden","drilling and blasting","coal hauling"],
+        "Coal Owner/Producer": ["coal producer","coal concession","coal reserves","thermal coal","coal production"],
+        "Mineral Mining": ["gold mining","nickel mining","copper mining","mineral producer","mineral resources"],
+        "Power Generation": ["power generation","electricity producer","power plant","independent power producer"],
+        "Renewable/Geothermal": ["renewable energy","geothermal","solar power","hydropower","wind power"]},
     "Oil & Gas": {
-        "Upstream E&P": ["exploration and production", "upstream oil", "oil and gas producer", "oil reserves", "gas reserves", "lifting"],
-        "Oilfield Services": ["oilfield services", "drilling services", "offshore services", "well services", "rig services"],
-        "Downstream & Distribution": ["fuel distribution", "refinery", "downstream oil", "gas distribution", "petroleum distribution"]},
+        "Upstream E&P": ["exploration and production","upstream oil","oil and gas producer","oil reserves","gas reserves","lifting"],
+        "Oilfield/Drilling Services": ["oilfield services","drilling services","offshore services","well services","rig services"],
+        "Midstream/Distribution": ["gas transmission","pipeline","gas distribution","fuel distribution","energy logistics"],
+        "Downstream/Refinery": ["oil refinery","refining","petrochemical","downstream oil","fuel retail"]},
     "Construction": {
-        "General Contractor": ["general contractor", "construction services", "building contractor", "civil contractor"],
-        "EPC & Infrastructure": ["engineering procurement construction", "epc contractor", "infrastructure construction", "toll road construction"]},
+        "General Contractor": ["general contractor","construction services","building contractor","civil contractor"],
+        "EPC Contractor": ["engineering procurement construction","epc contractor","industrial construction"],
+        "Infrastructure Contractor": ["infrastructure construction","toll road","railway construction","bridge construction"]},
     "Property": {
-        "Residential Developer": ["residential developer", "housing development", "property developer", "township"],
-        "Commercial & Industrial Estate": ["industrial estate", "office property", "commercial property", "shopping mall", "recurring income"]},
+        "Residential/Township": ["residential developer","housing development","property developer","township"],
+        "Commercial Property": ["office property","commercial property","shopping mall","mixed use development"],
+        "Industrial Estate": ["industrial estate","industrial land","industrial park","logistics estate"]},
     "Hotel": {
-        "Hotel Owner/Operator": ["hotel operator", "hotel owner", "hospitality company", "hotel management", "resort operator"]}
+        "Hotel Owner/Operator": ["hotel operator","hotel owner","hospitality company","hotel management"],
+        "Resort Operator": ["resort operator","resort hotel","leisure hospitality"],
+        "Budget Hotel": ["budget hotel","economy hotel","limited service hotel"]}
 }
 
-COMPANIES = [
-    ("PT Bukit Makmur Mandiri Utama", "BUMA", "Mining & Energy", "Mining Contractor", "Indonesia", 95, "Mining services and contract mining including overburden removal, coal hauling, drilling and blasting."),
-    ("PT Pamapersada Nusantara", "PAMA", "Mining & Energy", "Mining Contractor", "Indonesia", 100, "Large mining contractor providing mine planning, overburden removal, coal mining and hauling."),
-    ("PT Saptaindra Sejati", "SIS", "Mining & Energy", "Mining Contractor", "Indonesia", 78, "Integrated mining services covering exploration support, overburden, mining and coal hauling."),
-    ("PT Putra Perkasa Abadi", "PPA", "Mining & Energy", "Mining Contractor", "Indonesia", 72, "Coal mining contractor providing earthmoving, overburden removal and mining services."),
-    ("PT Cipta Kridatama", "CK", "Mining & Energy", "Mining Contractor", "Indonesia", 48, "Mining services contractor for overburden removal, coal extraction and infrastructure."),
-    ("PT Darma Henwa Tbk", "DEWA", "Mining & Energy", "Mining Contractor", "Indonesia", 45, "Integrated mining services, earthworks, mining infrastructure and mineral processing."),
-    ("PT Petrosea Tbk", "PTRO", "Mining & Energy", "Mining Contractor", "Indonesia", 55, "Contract mining, EPC, engineering and logistics services for mining and energy."),
-    ("PT Adaro Andalan Indonesia Tbk", "AADI", "Mining & Energy", "Coal Owner/Producer", "Indonesia", 92, "Thermal coal producer with mining concessions, coal reserves and integrated logistics."),
-    ("PT Bukit Asam Tbk", "PTBA", "Mining & Energy", "Coal Owner/Producer", "Indonesia", 86, "State-owned coal producer with coal reserves, mines, logistics and power development."),
-    ("PT Bayan Resources Tbk", "BYAN", "Mining & Energy", "Coal Owner/Producer", "Indonesia", 82, "Coal producer and concession owner operating integrated mining and logistics assets."),
-    ("PT Medco Energi Internasional Tbk", "MEDC", "Oil & Gas", "Upstream E&P", "Indonesia", 88, "Upstream oil and gas exploration and production with international assets and power operations."),
-    ("PT Energi Mega Persada Tbk", "ENRG", "Oil & Gas", "Upstream E&P", "Indonesia", 52, "Upstream oil and gas exploration, development and production company."),
-    ("PT Elnusa Tbk", "ELSA", "Oil & Gas", "Oilfield Services", "Indonesia", 50, "Integrated oilfield services including seismic, drilling, well services and energy logistics."),
-    ("PT Apexindo Pratama Duta Tbk", "APEX", "Oil & Gas", "Oilfield Services", "Indonesia", 32, "Onshore and offshore drilling contractor providing rig services to oil and gas companies."),
-    ("PT Perusahaan Gas Negara Tbk", "PGAS", "Oil & Gas", "Downstream & Distribution", "Indonesia", 90, "Natural gas transmission, distribution, trading and infrastructure company."),
-    ("PT Wijaya Karya (Persero) Tbk", "WIKA", "Construction", "EPC & Infrastructure", "Indonesia", 90, "EPC and infrastructure contractor covering transport, buildings, energy and industrial projects."),
-    ("PT PP (Persero) Tbk", "PTPP", "Construction", "General Contractor", "Indonesia", 88, "General construction and EPC company for buildings, infrastructure, property and energy projects."),
-    ("PT Adhi Karya (Persero) Tbk", "ADHI", "Construction", "EPC & Infrastructure", "Indonesia", 80, "Infrastructure and EPC contractor for railway, toll road, building and water projects."),
-    ("PT Nusa Raya Cipta Tbk", "NRCA", "Construction", "General Contractor", "Indonesia", 40, "General contractor focused on commercial, industrial, hotel and infrastructure construction."),
-    ("PT Total Bangun Persada Tbk", "TOTL", "Construction", "General Contractor", "Indonesia", 35, "Building contractor for premium high-rise, commercial, residential and hospitality projects."),
-    ("PT Bumi Serpong Damai Tbk", "BSDE", "Property", "Residential Developer", "Indonesia", 92, "Integrated township and residential property developer with commercial recurring assets."),
-    ("PT Ciputra Development Tbk", "CTRA", "Property", "Residential Developer", "Indonesia", 84, "Diversified residential and township developer operating projects across Indonesia."),
-    ("PT Summarecon Agung Tbk", "SMRA", "Property", "Residential Developer", "Indonesia", 65, "Township developer with residential sales, malls and recurring commercial income."),
-    ("PT Puradelta Lestari Tbk", "DMAS", "Property", "Commercial & Industrial Estate", "Indonesia", 60, "Industrial estate developer selling industrial land and commercial property."),
-    ("PT Kawasan Industri Jababeka Tbk", "KIJA", "Property", "Commercial & Industrial Estate", "Indonesia", 58, "Industrial estate and township developer with infrastructure and recurring services."),
-    ("PT Hotel Sahid Jaya International Tbk", "SHID", "Hotel", "Hotel Owner/Operator", "Indonesia", 32, "Hotel owner and hospitality operator managing accommodation, food and event facilities."),
-    ("PT Eastparc Hotel Tbk", "EAST", "Hotel", "Hotel Owner/Operator", "Indonesia", 20, "Hotel and resort owner focused on rooms, food and beverage, meetings and leisure facilities."),
-    ("PT Indonesian Paradise Property Tbk", "INPP", "Hotel", "Hotel Owner/Operator", "Indonesia", 45, "Hospitality and lifestyle property owner with hotels, malls and mixed-use assets."),
-    ("PT Menteng Heritage Realty Tbk", "HRME", "Hotel", "Hotel Owner/Operator", "Indonesia", 18, "Hotel property owner generating revenue from rooms, food, beverage and hospitality services.")
+SCALE_KEYWORDS = {
+    "Large/National": ["largest","leading","major","national","nationwide","public listed","tbk","market leader","international","billion","trillion"],
+    "Medium": ["mid-sized","medium-sized","regional","established company","multiple projects","million"],
+    "Small/Regional": ["small company","local contractor","local developer","boutique","single project","regional operator"]
+}
+
+# Fallback keeps the demonstration useful if a search provider is temporarily unavailable.
+REFERENCE = [
+    ("PT Bukit Makmur Mandiri Utama","Mining & Energy","Mining Contractor","Large/National","BUMA mining services and contract mining in Indonesia and Australia."),
+    ("PT Pamapersada Nusantara","Mining & Energy","Mining Contractor","Large/National","Large national mining contractor providing overburden removal and coal hauling."),
+    ("PT Saptaindra Sejati","Mining & Energy","Mining Contractor","Large/National","Integrated mining services and coal mining contractor."),
+    ("PT Putra Perkasa Abadi","Mining & Energy","Mining Contractor","Large/National","Mining contractor providing earthmoving and overburden services."),
+    ("PT Cipta Kridatama","Mining & Energy","Mining Contractor","Medium","Mining services contractor for coal and mineral operations."),
+    ("PT Darma Henwa Tbk","Mining & Energy","Mining Contractor","Medium","Public listed integrated mining services contractor."),
+    ("PT Petrosea Tbk","Mining & Energy","Mining Contractor","Medium","Contract mining and EPC services company."),
+    ("PT Adaro Andalan Indonesia Tbk","Mining & Energy","Coal Owner/Producer","Large/National","Large thermal coal producer and concession owner."),
+    ("PT Bukit Asam Tbk","Mining & Energy","Coal Owner/Producer","Large/National","National coal producer with reserves and integrated logistics."),
+    ("PT Bayan Resources Tbk","Mining & Energy","Coal Owner/Producer","Large/National","Major coal producer and concession owner."),
+    ("PT Medco Energi Internasional Tbk","Oil & Gas","Upstream E&P","Large/National","International upstream oil and gas exploration and production company."),
+    ("PT Energi Mega Persada Tbk","Oil & Gas","Upstream E&P","Medium","Upstream oil and gas producer."),
+    ("PT Elnusa Tbk","Oil & Gas","Oilfield/Drilling Services","Large/National","Integrated national oilfield and drilling services."),
+    ("PT Apexindo Pratama Duta Tbk","Oil & Gas","Oilfield/Drilling Services","Medium","Onshore and offshore drilling contractor."),
+    ("PT Wijaya Karya (Persero) Tbk","Construction","EPC Contractor","Large/National","National EPC and infrastructure construction company."),
+    ("PT PP (Persero) Tbk","Construction","General Contractor","Large/National","National general construction and EPC contractor."),
+    ("PT Adhi Karya (Persero) Tbk","Construction","Infrastructure Contractor","Large/National","National railway and infrastructure contractor."),
+    ("PT Nusa Raya Cipta Tbk","Construction","General Contractor","Medium","Public listed building and general contractor."),
+    ("PT Total Bangun Persada Tbk","Construction","General Contractor","Medium","Building contractor for premium property projects."),
+    ("PT Bumi Serpong Damai Tbk","Property","Residential/Township","Large/National","Large integrated township property developer."),
+    ("PT Ciputra Development Tbk","Property","Residential/Township","Large/National","National residential and township developer."),
+    ("PT Summarecon Agung Tbk","Property","Residential/Township","Large/National","Township and commercial property developer."),
+    ("PT Puradelta Lestari Tbk","Property","Industrial Estate","Medium","Industrial estate and industrial land developer."),
+    ("PT Kawasan Industri Jababeka Tbk","Property","Industrial Estate","Large/National","Large industrial estate and township developer."),
+    ("PT Hotel Sahid Jaya International Tbk","Hotel","Hotel Owner/Operator","Medium","Hotel owner and hospitality operator."),
+    ("PT Eastparc Hotel Tbk","Hotel","Hotel Owner/Operator","Small/Regional","Single-market hotel owner and operator."),
+    ("PT Indonesian Paradise Property Tbk","Hotel","Hotel Owner/Operator","Medium","Hospitality and lifestyle property owner."),
 ]
+REF = pd.DataFrame(REFERENCE, columns=["company_name","sector","business_model","scale","description"])
 
-DB = pd.DataFrame(COMPANIES, columns=["company_name","ticker","sector","business_model","country","scale_index","description"])
+def clean(value):
+    return re.sub(r"\s+", " ", re.sub(r"[^a-zA-Z0-9&.,()'’\- ]", " ", str(value))).strip()
 
-def norm(s): return re.sub(r"[^a-z0-9 ]", " ", str(s).lower()).strip()
+def norm(value):
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def search_web(company):
+@st.cache_data(ttl=1800, show_spinner=False)
+def web_search(query, limit=8):
     rows=[]
-    queries=[f'"{company}" company profile business', f'"{company}" annual report sector']
     try:
         with DDGS() as ddgs:
-            for query in queries:
-                for r in ddgs.text(query, region="id-id", max_results=5):
-                    rows.append({"title":r.get("title",""),"url":r.get("href",""),"snippet":r.get("body","")})
+            for item in ddgs.text(query, region="id-id", safesearch="moderate", max_results=limit):
+                rows.append({"title":item.get("title", ""), "url":item.get("href", ""), "snippet":item.get("body", ""), "query":query})
     except Exception:
         pass
-    seen=set(); out=[]
-    for r in rows:
-        if r["url"] and r["url"] not in seen:
-            seen.add(r["url"]); out.append(r)
-    return out
+    return rows
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_text(url):
-    try:
-        res=requests.get(url,timeout=10,headers={"User-Agent":"Mozilla/5.0"})
-        if "pdf" in res.headers.get("content-type","").lower(): return ""
-        return trafilatura.extract(res.text, favor_precision=True) or ""
-    except Exception: return ""
+def keyword_hits(text, keywords):
+    lowered=text.lower()
+    return [keyword for keyword in keywords if keyword in lowered]
 
-def classify(text):
-    text=norm(text); scores=[]
-    for sector, models in SECTOR_RULES.items():
-        for model, keys in models.items():
-            score=sum(text.count(k) for k in keys)
-            scores.append((score,sector,model,[k for k in keys if k in text]))
+def classify_business(text):
+    rows=[]
+    for sector, models in TAXONOMY.items():
+        for model, keywords in models.items():
+            hits=keyword_hits(text, keywords)
+            rows.append((len(hits), sector, model, hits))
+    rows.sort(reverse=True)
+    return rows[0] if rows and rows[0][0] else (0,"Unclassified","Unclassified",[])
+
+def classify_scale(text):
+    scores=[]
+    for scale, keywords in SCALE_KEYWORDS.items():
+        hits=keyword_hits(text, keywords)
+        scores.append((len(hits),scale,hits))
     scores.sort(reverse=True)
-    return scores[0] if scores and scores[0][0] else (0,"Unclassified","Unclassified",[])
+    return scores[0] if scores and scores[0][0] else (0,"Undetermined",[])
 
-def resolve_target(name, web_text):
-    exact=DB[DB.company_name.map(norm).str.contains(norm(name),regex=False)]
+def target_profile(company):
+    exact=REF[REF.company_name.map(norm)==norm(company)]
+    queries=[f'"{company}" company profile business activities', f'"{company}" industry sector Indonesia']
+    sources=sum([web_search(query,6) for query in queries],[])
+    text=" ".join(f"{x['title']} {x['snippet']}" for x in sources)
     if not exact.empty:
         row=exact.iloc[0]
-        return row.sector,row.business_model,row.description,"Reference database"
-    score,sector,model,_=classify(web_text)
-    return sector,model,web_text[:1200] or "Public profile could not be extracted.","Live public search"
+        return row.sector,row.business_model,row.scale,row.description,sources,"Reference + public search"
+    _,sector,model,_=classify_business(text)
+    _,scale,_=classify_scale(text)
+    return sector,model,scale,text[:1800],sources,"Dynamic public search"
 
-def rank_peers(name, sector, model, description):
-    pool=DB[(DB.sector==sector)&(DB.company_name.map(norm)!=norm(name))].copy()
-    if pool.empty: return pool
-    docs=[description]+pool.description.tolist()
-    tf=TfidfVectorizer(ngram_range=(1,2),stop_words="english").fit_transform(docs)
-    pool["text_similarity"]=cosine_similarity(tf[0:1],tf[1:])[0]*100
-    pool["model_match"]=(pool.business_model==model).astype(int)*100
-    known=DB[DB.company_name.map(norm)==norm(name)]
-    target_scale=float(known.iloc[0].scale_index) if not known.empty else float(pool.scale_index.median())
-    pool["scale_similarity"]=(1-(pool.scale_index-target_scale).abs()/max(target_scale,1)).clip(0,1)*100
-    pool["similarity_score"]=.50*pool.model_match+.30*pool.text_similarity+.20*pool.scale_similarity
-    pool["peer_type"]=np.where(pool.model_match==100,"Direct Operational Peer","Sector Peer")
-    return pool.sort_values("similarity_score",ascending=False).head(7)
+CORPORATE_PATTERN = re.compile(
+    r"\b(?:PT\.?\s+)?[A-Z][A-Za-z0-9&'’.,\-]+(?:\s+[A-Z][A-Za-z0-9&'’.,()\-]+){1,8}"
+    r"(?:\s+(?:Tbk|Ltd|Limited|Corporation|Corp|Group|Indonesia))?\b"
+)
 
-def excel_bytes(target, peers, sources):
-    output=io.BytesIO()
-    with pd.ExcelWriter(output,engine="xlsxwriter") as writer:
-        pd.DataFrame([target]).to_excel(writer,sheet_name="Target",index=False)
-        peers.to_excel(writer,sheet_name="Peer Ranking",index=False)
-        pd.DataFrame(sources).to_excel(writer,sheet_name="Source Log",index=False)
-    return output.getvalue()
+BAD_PHRASES={"Annual Report","Company Profile","Mining Contractor","Oil Gas","Search Results","Indonesia Stock Exchange","Financial Statements","Sustainability Report"}
 
-st.markdown('<div class="hero"><span class="badge">COMMERCIAL RISK 3 GROUP</span><h1>PEARL MI3</h1><p>Peer Analytics and Risk Lens · Multi-sector peer discovery for credit analysis</p></div>',unsafe_allow_html=True)
+def names_from_result(result):
+    candidates=[]
+    title=clean(re.split(r"[|–—:]",result["title"])[0])
+    if 2 <= len(title.split()) <= 12:
+        candidates.append(title)
+    for match in CORPORATE_PATTERN.findall(f"{result['title']} {result['snippet']}"):
+        candidates.append(clean(match))
+    return [name for name in candidates if name not in BAD_PHRASES and len(name)>=5]
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def discover_live(sector, model, scale):
+    queries=[
+        f'companies "{model}" Indonesia',
+        f'largest "{model}" companies Indonesia',
+        f'"{model}" company profile Indonesia',
+        f'"{model}" competitors Indonesia {scale}'
+    ]
+    results=sum([web_search(query,10) for query in queries],[])
+    records=[]
+    for result in results:
+        for name in names_from_result(result):
+            records.append({"company_name":name,"description":clean(f"{result['title']} {result['snippet']}"),"source_url":result["url"],"source_title":result["title"],"origin":"Live discovery"})
+    return records,results
+
+def build_universe(company, sector, model, scale):
+    live,_=discover_live(sector,model,scale)
+    fallback=REF[(REF.sector==sector)&(REF.company_name.map(norm)!=norm(company))].copy()
+    fallback["source_url"]=""; fallback["source_title"]="Reference database"; fallback["origin"]="Reference fallback"
+    records=live+fallback[["company_name","description","source_url","source_title","origin"]].to_dict("records")
+    dedup={}
+    for record in records:
+        key=norm(record["company_name"])
+        if key and key!=norm(company) and key not in dedup: dedup[key]=record
+    return list(dedup.values())
+
+def score_candidates(company, sector, model, scale, records):
+    output=[]
+    model_keys=TAXONOMY[sector][model]
+    for record in records:
+        text=f"{record['company_name']} {record['description']}"
+        model_hits=keyword_hits(text,model_keys)
+        _,candidate_sector,candidate_model,_=classify_business(text)
+        _,candidate_scale,scale_hits=classify_scale(text)
+        # Results returned by a highly targeted query remain potential candidates when snippets are sparse.
+        targeted=record["origin"]=="Live discovery"
+        sector_eligible=(candidate_sector==sector) or targeted
+        model_score=min(100, 25+20*len(model_hits)) if targeted else min(100,20*len(model_hits))
+        if candidate_model==model: model_score=max(model_score,100)
+        if candidate_scale==scale: scale_score=100
+        elif candidate_scale=="Undetermined": scale_score=50
+        elif {candidate_scale,scale}=={"Large/National","Medium"}: scale_score=65
+        elif {candidate_scale,scale}=={"Medium","Small/Regional"}: scale_score=65
+        else: scale_score=25
+        final=.60*model_score+.40*scale_score
+        confidence="Verified by rules" if candidate_model==model and candidate_scale==scale else ("Potential—CRM review" if sector_eligible else "Not comparable")
+        if sector_eligible:
+            output.append({**record,"detected_business_model":candidate_model,"detected_scale":candidate_scale,"business_similarity":model_score,"scale_similarity":scale_score,"peer_score":final,"status":confidence,"matching_basis":", ".join(model_hits+scale_hits) or "Targeted sector search"})
+    if not output: return pd.DataFrame()
+    return pd.DataFrame(output).sort_values(["peer_score","origin"],ascending=[False,False]).head(20).reset_index(drop=True)
+
+def to_excel(target, peers, sources):
+    stream=io.BytesIO()
+    with pd.ExcelWriter(stream,engine="xlsxwriter") as writer:
+        pd.DataFrame([target]).to_excel(writer,sheet_name="Target Profile",index=False)
+        peers.to_excel(writer,sheet_name="Candidate Peers",index=False)
+        pd.DataFrame(sources).to_excel(writer,sheet_name="Target Sources",index=False)
+    return stream.getvalue()
+
+st.markdown('<div class="hero"><span class="tag">COMMERCIAL RISK 3 GROUP</span><h1>PEARL MI3 · Dynamic Peer Finder</h1><p>Candidate screening based on sector, business model, and business scale</p></div>',unsafe_allow_html=True)
 with st.sidebar:
-    st.subheader("Coverage")
-    st.write("Mining & Energy\n\nOil & Gas\n\nConstruction\n\nProperty\n\nHotel")
-    st.divider()
-    st.caption("Public-information decision support. Every result requires CRM verification.")
+    st.subheader("Screening principle")
+    st.write("**Eligibility:** same sector/subsector\n\n**Ranking:** 60% business model + 40% business scale")
+    st.info("This tool finds candidate peers. CRM selects final peers and performs the financial analysis.")
 
-left,right=st.columns([4,1])
-with left:
-    company=st.text_input("Company name",value="PT Bukit Makmur Mandiri Utama",placeholder="e.g. PT Bukit Makmur Mandiri Utama")
-with right:
-    sector_override=st.selectbox("Sector",["Auto Detect"]+list(SECTOR_RULES.keys()))
+company=st.text_input("Company name",value="PT Bukit Makmur Mandiri Utama",placeholder="Type any public company name")
+c1,c2,c3=st.columns(3)
+with c1: selected_sector=st.selectbox("Sector",["Auto Detect"]+list(TAXONOMY.keys()))
+with c2:
+    possible_models=["Auto Detect"] if selected_sector=="Auto Detect" else ["Auto Detect"]+list(TAXONOMY[selected_sector].keys())
+    selected_model=st.selectbox("Subsector / business model",possible_models)
+with c3: selected_scale=st.selectbox("Business scale",["Auto Detect","Large/National","Medium","Small/Regional"])
 
-if st.button("Search & analyze peers",type="primary",use_container_width=True):
+if st.button("Discover candidate peers",type="primary",use_container_width=True):
     if not company.strip(): st.warning("Enter a company name first."); st.stop()
-    with st.spinner("Searching public sources and matching comparable companies..."):
-        sources=search_web(company)
-        web_text=" ".join([s["title"]+" "+s["snippet"] for s in sources])
-        for source in sources[:3]: web_text += " " + fetch_text(source["url"])[:20000]
-        sector,model,description,method=resolve_target(company,web_text)
-        if sector_override!="Auto Detect":
-            sector=sector_override
-            _,auto_model,_,_=classify(web_text)
-            if auto_model in SECTOR_RULES[sector]: model=auto_model
-            else: model=list(SECTOR_RULES[sector].keys())[0]
-        peers=rank_peers(company,sector,model,description)
-        st.session_state.result=(sector,model,description,method,peers,sources)
+    with st.spinner("Reading the target profile and discovering candidate companies..."):
+        auto_sector,auto_model,auto_scale,description,sources,method=target_profile(company)
+        sector=auto_sector if selected_sector=="Auto Detect" else selected_sector
+        if sector=="Unclassified": st.error("Sector could not be detected. Select the sector manually and run again."); st.stop()
+        model=auto_model if selected_model=="Auto Detect" and auto_model in TAXONOMY[sector] else (list(TAXONOMY[sector].keys())[0] if selected_model=="Auto Detect" else selected_model)
+        scale=auto_scale if selected_scale=="Auto Detect" else selected_scale
+        if scale=="Undetermined": scale="Medium"
+        universe=build_universe(company,sector,model,scale)
+        peers=score_candidates(company,sector,model,scale,universe)
+        st.session_state.analysis=(sector,model,scale,description,sources,method,peers)
 
-if "result" in st.session_state:
-    sector,model,description,method,peers,sources=st.session_state.result
-    c1,c2,c3,c4=st.columns(4)
-    c1.metric("Detected sector",sector); c2.metric("Business model",model); c3.metric("Peers selected",len(peers)); c4.metric("Public sources",len(sources))
-    tab1,tab2,tab3,tab4=st.tabs(["Peer ranking","Comparison","Sources","NAK narrative"])
-    with tab1:
-        shown=peers[["company_name","ticker","business_model","peer_type","similarity_score"]].copy()
-        shown.index=np.arange(1,len(shown)+1)
-        st.dataframe(shown,use_container_width=True,column_config={"similarity_score":st.column_config.ProgressColumn("Similarity",min_value=0,max_value=100,format="%.1f")})
-        st.caption("Similarity combines business-model match, profile-text similarity, and relative operating scale proxy.")
-    with tab2:
-        if not peers.empty:
-            fig=px.bar(peers.sort_values("similarity_score"),x="similarity_score",y="company_name",orientation="h",color="peer_type",labels={"similarity_score":"Similarity score","company_name":""},color_discrete_sequence=["#0b4d8f","#e6a700"])
-            fig.update_layout(template="plotly_white",legend_title="")
-            st.plotly_chart(fig,use_container_width=True)
-    with tab3:
-        st.write(f"Classification method: **{method}**")
+if "analysis" in st.session_state:
+    sector,model,scale,description,sources,method,peers=st.session_state.analysis
+    m1,m2,m3,m4=st.columns(4)
+    m1.metric("Sector",sector);m2.metric("Business model",model);m3.metric("Business scale",scale);m4.metric("Candidates",len(peers))
+    t1,t2,t3,t4=st.tabs(["Candidate peers","Scoring basis","Public sources","CRM handoff"])
+    with t1:
+        if peers.empty: st.warning("No candidates found. Select sector, business model, and scale manually, then search again.")
+        else:
+            view=peers[["company_name","detected_business_model","detected_scale","peer_score","status","origin"]].copy();view.index=np.arange(1,len(view)+1)
+            st.dataframe(view,use_container_width=True,column_config={"peer_score":st.column_config.ProgressColumn("Peer score",min_value=0,max_value=100,format="%.1f")})
+            chart=px.bar(peers.head(10).sort_values("peer_score"),x="peer_score",y="company_name",orientation="h",color="status",labels={"peer_score":"Peer score","company_name":""})
+            chart.update_layout(template="plotly_white",legend_title="");st.plotly_chart(chart,use_container_width=True)
+    with t2:
+        st.markdown("""**Eligibility filter**\n\nA candidate must be in the same sector or be returned by a targeted subsector search.\n\n**Peer score**\n\n- 60% business-model similarity: similarity of activities, products, services, and revenue drivers.\n- 40% scale similarity: Large/National, Medium, or Small/Regional.\n\nNo financial-performance score is used. CRM performs the financial comparison after selecting the candidates.""")
+        if not peers.empty: st.dataframe(peers[["company_name","business_similarity","scale_similarity","matching_basis","source_url"]],use_container_width=True)
+    with t3:
+        st.write(f"Target identification: **{method}**")
         if sources:
-            for s in sources: st.markdown(f"- [{s['title']}]({s['url']}) — {s['snippet'][:220]}")
-        else: st.info("Live sources were unavailable; the reference database kept the demo operational.")
-    with tab4:
-        names=", ".join(peers.company_name.head(5).tolist())
-        narrative=(f"Berdasarkan pemetaan perusahaan pembanding, {company} diklasifikasikan pada sektor {sector} dengan business model {model}. Kandidat peers yang paling relevan meliputi {names}. Pemilihan didasarkan pada kesamaan kegiatan usaha, layanan utama, dan proksi skala operasi. Hasil ini merupakan preliminary peer screening dan tetap memerlukan validasi laporan keuangan, periode data, struktur grup, serta professional judgment Credit Risk Manager sebelum digunakan dalam NAK.")
-        st.text_area("Draft peer analysis",narrative,height=190)
-        target={"company_name":company,"sector":sector,"business_model":model,"classification_method":method,"retrieved_at":datetime.now(timezone.utc).isoformat()}
-        st.download_button("Download analysis (Excel)",excel_bytes(target,peers,sources),file_name="PEARL_MI3_Peer_Analysis.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+            for source in sources: st.markdown(f"- [{source['title']}]({source['url']}) — {source['snippet'][:240]}")
+        else: st.info("Public search was unavailable. Select the classifications manually and use the reference candidates.")
+    with t4:
+        shortlist=peers.head(7).company_name.tolist() if not peers.empty else []
+        st.markdown("**Suggested CRM next steps**")
+        st.write("1. Review and confirm the business comparability of each candidate.\n2. Select 3–7 final peers.\n3. Retrieve the latest audited/quarterly financial statements.\n4. Standardize currency, period, and consolidated/standalone basis.\n5. Perform the financial benchmark in the NAK.")
+        if shortlist: st.write("Initial shortlist: "+", ".join(shortlist)+".")
+        target={"company_name":company,"sector":sector,"business_model":model,"business_scale":scale,"screened_at":datetime.now(timezone.utc).isoformat()}
+        st.download_button("Download candidate screening (Excel)",to_excel(target,peers,sources),file_name="PEARL_MI3_Candidate_Peers.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 else:
-    st.info("Enter a company name, then select **Search & analyze peers**. Try BUMA, Medco, WIKA, BSDE, or Eastparc Hotel.")
+    st.info("Search any public company. If auto-detection is uncertain, select sector, business model, and scale manually.")
 
