@@ -1,7 +1,19 @@
-# PEARL MI3 Dynamic Peer Finder
+# PEARL Mining Services
 
-Dynamic candidate-peer screening for Commercial Risk 3 Group.
+Focused pilot for Multi Industries 3: operational peer mapping and business-pattern analysis for mining contractors/mining services.
 
-The application searches public profiles and discovers peer candidates using two dimensions: sector/business model and qualitative business scale. It does not perform financial comparison; the CRM selects final peers and retrieves the latest financial statements.
+## What it does
 
-Deploy `app.py` with `requirements.txt` on Streamlit Community Cloud.
+- Ranks candidate peers using operational characteristics rather than financial ratios.
+- Shows why companies are comparable and where their business patterns differ.
+- Produces diagnostic hypotheses for margin differences.
+- Provides a sector-specific NAK checklist.
+- Keeps the peer database in an editable CSV, separate from the Python code.
+
+## Deploy on Streamlit Community Cloud
+
+Upload `app.py`, `requirements.txt`, `README.md`, and the `data` folder to the repository. The Streamlit main file remains `app.py`.
+
+## Governance
+
+All starter data is preliminary and marked Pending CRM Validation. Use public or approved information only and validate every profile against the latest NAK, company profile, contract information, or annual report.
