@@ -12,7 +12,7 @@ Focused pilot for Multi Industries 3: operational peer mapping and business-patt
 
 ## Deploy on Streamlit Community Cloud
 
-Upload `app.py`, `requirements.txt`, `README.md`, and the `data` folder to the repository. The Streamlit main file remains `app.py`.
+Upload these four files side by side in the repository root: `app.py`, `requirements.txt`, `README.md`, and `mining_services_database.csv`. No `data` folder is required. The Streamlit main file remains `app.py`.
 
 ## Governance
 

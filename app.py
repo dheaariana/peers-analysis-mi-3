@@ -17,7 +17,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-DATA_PATH=Path(__file__).parent/"data"/"mining_services_database.csv"
+ROOT_DIR=Path(__file__).parent
+DATA_PATH=ROOT_DIR/"mining_services_database.csv"
+# Backward-compatible fallback for an older package structure.
+if not DATA_PATH.exists():
+    DATA_PATH=ROOT_DIR/"data"/"mining_services_database.csv"
 
 FIELDS={
     "service_scope":("Service scope",25),
@@ -174,4 +178,3 @@ with tabs[4]:
     edited=st.data_editor(df,use_container_width=True,num_rows="dynamic",height=420)
     st.download_button("Download updated database",edited.to_csv(index=False).encode("utf-8"),file_name="mining_services_database.csv",mime="text/csv",use_container_width=True)
     st.download_button("Download blank template",pd.DataFrame(columns=df.columns).to_csv(index=False).encode("utf-8"),file_name="mining_services_template.csv",mime="text/csv",use_container_width=True)
-
