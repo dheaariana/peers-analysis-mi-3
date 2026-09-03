@@ -10,8 +10,11 @@ Versi ini fokus pada informasi kualitatif yang tidak diduplikasi oleh tools anal
 - Hasil scraping baru selalu berstatus `Menunggu Verifikasi CRM`.
 - Data yang tidak ditemukan dibiarkan kosong.
 - Skor kemiripan bukan rating atau keputusan kredit.
-- Pilihan perusahaan awal dikosongkan; aplikasi tidak lagi otomatis memilih BUMA.
-- Debitur baru dapat dicari melalui publikasi web dan URL resmi, kemudian langsung dibandingkan dengan database peer.
+- Satu kolom pencarian digunakan untuk seluruh perusahaan; pengguna tidak perlu memilih database atau web.
+- PEARL otomatis mengecek database, lalu mencari publikasi web jika perusahaan belum tersedia.
+- Pengguna tidak perlu memasukkan URL; pencarian halaman perusahaan dan berita dilakukan otomatis.
+- URL hasil pencarian ditampilkan sebagai tautan yang dapat langsung diklik.
+- Kolom awal dikosongkan; aplikasi tidak lagi otomatis memilih BUMA.
 - Profil hasil ekstraksi web ditampilkan bersama sumber dan selalu diberi label sementara sampai diverifikasi CRM.
 
 ## Deploy Streamlit
@@ -29,6 +32,6 @@ Main file path: `app.py`
 
 ## Memperbarui database
 
-Gunakan menu `Pembaruan Publik` untuk mencari dan membaca halaman sumber. Pilih parameter dan masukkan hanya nilai yang benar-benar didukung isi sumber. Setelah CRM memverifikasi bukti pada `Kelola Database`, unduh `bukti_model_bisnis.csv` dan ganti file yang sama di GitHub.
+Gunakan menu `Pembaruan Publik`, masukkan nama perusahaan, lalu pilih sumber dari hasil pencarian otomatis. Pilih parameter dan masukkan hanya nilai yang benar-benar didukung isi sumber. Setelah CRM memverifikasi bukti pada `Kelola Database`, unduh `bukti_model_bisnis.csv` dan ganti file yang sama di GitHub.
 
 Jangan mengunggah data rahasia ke Streamlit publik.

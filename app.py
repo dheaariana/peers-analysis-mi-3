@@ -1,4 +1,5 @@
 import io
+import html
 import ipaddress
 import re
 import socket
@@ -6,7 +7,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import pandas as pd
 import requests
@@ -168,6 +169,33 @@ def discover_news(company):
     return rows
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def discover_web_pages(company):
+    """Find candidate public/company pages without requiring the user to paste a URL."""
+    query = quote_plus(f'"{company}" profil perusahaan pertambangan kontraktor official')
+    search_url = f"https://html.duckduckgo.com/html/?q={query}"
+    response = requests.get(search_url, timeout=12,
+                            headers={"User-Agent": "Mozilla/5.0 PEARL-MI3/1.0"})
+    response.raise_for_status()
+    matches = re.findall(r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+                         response.text, flags=re.I | re.S)
+    rows = []
+    for raw_url, raw_title in matches:
+        link = html.unescape(raw_url)
+        if link.startswith("//"): link = "https:" + link
+        parsed = urlparse(link)
+        if "duckduckgo.com" in (parsed.hostname or ""):
+            redirected = parse_qs(parsed.query).get("uddg", [])
+            if redirected: link = unquote(redirected[0])
+        if urlparse(link).scheme not in {"http", "https"}: continue
+        title = re.sub(r"<[^>]+>", " ", raw_title)
+        rows.append({"Judul": html.unescape(re.sub(r"\s+", " ", title).strip()),
+                     "Sumber": urlparse(link).hostname or "", "URL": link,
+                     "Status": "Kandidat sumber—belum tervalidasi"})
+        if len(rows) == 6: break
+    return rows
+
+
 def extract_business_profile(company, news_rows, official_page=None):
     """Create a provisional profile only from words found in retrieved public text."""
     text_parts = []
@@ -176,10 +204,11 @@ def extract_business_profile(company, news_rows, official_page=None):
         text_parts.extend([row.get("Judul", ""), row.get("Ringkasan", "")])
         sources.append({"Judul": row.get("Judul", ""), "Sumber": row.get("Sumber", ""),
                         "Tanggal": row.get("Tanggal", ""), "URL": row.get("URL", "")})
-    if official_page:
-        text_parts.extend([official_page.get("judul", ""), official_page.get("teks", "")])
-        sources.insert(0, {"Judul": official_page.get("judul", ""), "Sumber": "Halaman resmi yang dimasukkan pengguna",
-                           "Tanggal": "", "URL": official_page.get("url", "")})
+    pages = official_page if isinstance(official_page, list) else ([official_page] if official_page else [])
+    for page in pages:
+        text_parts.extend([page.get("judul", ""), page.get("teks", "")])
+        sources.insert(0, {"Judul": page.get("judul", ""), "Sumber": urlparse(page.get("url", "")).hostname or "Halaman publik",
+                           "Tanggal": "", "URL": page.get("url", "")})
     text = " ".join(text_parts).casefold()
     profile = {"nama_perusahaan": company, **{parameter: "" for parameter in PARAMETERS}}
 
@@ -276,50 +305,50 @@ with tabs[0]:
     if profiles.empty:
         st.error("Belum ada bukti tervalidasi yang dapat digunakan.")
     else:
-        mode = st.radio("Sumber perusahaan target", ["Database terverifikasi", "Cari debitur baru dari web"], horizontal=True)
-        if st.session_state.get("last_search_mode") != mode:
-            for key in ["target", "ranked", "target_sources", "provisional", "search_note"]:
-                st.session_state.pop(key, None)
-            st.session_state.last_search_mode = mode
-        if mode == "Database terverifikasi":
-            options = ["— Pilih perusahaan —"] + sorted(profiles["nama_perusahaan"].unique())
-            target_name = st.selectbox("Perusahaan target", options, index=0)
-            if st.button("Cari peer berdasarkan data", type="primary", use_container_width=True):
-                if target_name == "— Pilih perusahaan —":
-                    st.error("Pilih perusahaan terlebih dahulu.")
-                else:
-                    target = profiles[profiles["nama_perusahaan"] == target_name].iloc[0].to_dict()
+        company_query = st.text_input(
+            "Nama perusahaan/debitur", "",
+            placeholder="Contoh: PT Antareja Mahada Makmur",
+            help="Ketik nama perusahaan yang sudah ada maupun perusahaan baru.",
+        )
+        st.caption("PEARL otomatis mengecek database, mencari publikasi, dan mencari halaman publik perusahaan.")
+        if st.button("Cari peers", type="primary", use_container_width=True):
+            if not company_query.strip():
+                st.error("Nama perusahaan/debitur wajib diisi.")
+            else:
+                matched = profiles[
+                    profiles["nama_perusahaan"].map(normalize_name) == normalize_name(company_query)
+                ]
+                if not matched.empty:
+                    target = matched.iloc[0].to_dict()
                     ranked = rank_peers(profiles, target)
+                    canonical_name = target["nama_perusahaan"]
                     st.session_state.target = target; st.session_state.ranked = ranked
-                    st.session_state.target_sources = evidence[evidence["nama_perusahaan"] == target_name]
+                    st.session_state.target_sources = evidence[evidence["nama_perusahaan"] == canonical_name]
                     st.session_state.provisional = False
-                    st.session_state.search_note = "Peer dihitung dari database terverifikasi."
-        else:
-            new_company = st.text_input("Nama debitur baru", "", placeholder="Contoh: PT Antareja Mahada Makmur")
-            official_url = st.text_input("URL website/halaman resmi (opsional tetapi disarankan)", "",
-                                         placeholder="https://www.perusahaan.co.id/profil-atau-proyek")
-            st.caption("Sistem mencari publikasi, mengekstrak kata yang benar-benar ditemukan, lalu membandingkannya dengan database peer terverifikasi.")
-            if st.button("Cari data publik dan tampilkan peers", type="primary", use_container_width=True):
-                if not new_company.strip():
-                    st.error("Nama debitur wajib diisi.")
+                    st.session_state.search_note = "Perusahaan ditemukan dalam database. Peer dihitung dari data bersumber."
                 else:
                     try:
-                        with st.spinner("Mencari dan membaca data publik..."):
+                        with st.spinner("Perusahaan belum ada di database. Mencari dan membaca data publik..."):
                             news_rows = []
-                            official_page = None
+                            web_rows = []
+                            scraped_pages = []
                             search_errors = []
                             try:
-                                news_rows = discover_news(new_company.strip())
+                                news_rows = discover_news(company_query.strip())
                             except Exception as news_error:
                                 search_errors.append(f"Pencarian publikasi: {news_error}")
-                            if official_url.strip():
+                            try:
+                                web_rows = discover_web_pages(company_query.strip())
+                            except Exception as web_error:
+                                search_errors.append(f"Pencarian halaman web: {web_error}")
+                            for page in web_rows[:3]:
                                 try:
-                                    official_page = scrape_page(official_url.strip())
-                                except Exception as page_error:
-                                    search_errors.append(f"Pembacaan URL resmi: {page_error}")
-                            if not news_rows and official_page is None:
+                                    scraped_pages.append(scrape_page(page["URL"]))
+                                except Exception:
+                                    continue
+                            if not news_rows and not scraped_pages:
                                 raise ValueError("Tidak ada sumber yang berhasil dibaca. " + "; ".join(search_errors))
-                            target, source_rows = extract_business_profile(new_company.strip(), news_rows, official_page)
+                            target, source_rows = extract_business_profile(company_query.strip(), news_rows, scraped_pages)
                             ranked, note = rank_provisional(profiles, target)
                             if search_errors:
                                 note += " Sebagian sumber gagal dibaca: " + "; ".join(search_errors)
@@ -331,7 +360,7 @@ with tabs[0]:
         target = st.session_state.get("target")
         ranked = st.session_state.get("ranked", pd.DataFrame())
         if target is None:
-            st.info("Pilih perusahaan lalu tekan **Cari peer berdasarkan data**.")
+            st.info("Ketik nama perusahaan/debitur lalu tekan **Cari peers**.")
         elif ranked.empty:
             st.warning("Belum ada peer eligible dengan subsektor dan peran usaha yang sama berdasarkan bukti tersedia.")
         else:
@@ -350,7 +379,9 @@ with tabs[0]:
             target_sources = st.session_state.get("target_sources", pd.DataFrame())
             if isinstance(target_sources, pd.DataFrame) and not target_sources.empty:
                 with st.expander("Lihat sumber data target"):
-                    st.dataframe(target_sources, use_container_width=True, hide_index=True)
+                    st.dataframe(target_sources, use_container_width=True, hide_index=True,
+                                 column_config={"URL": st.column_config.LinkColumn("Buka sumber"),
+                                                "url_sumber": st.column_config.LinkColumn("Buka sumber")})
 
 with tabs[1]:
     target = st.session_state.get("target"); ranked = st.session_state.get("ranked", pd.DataFrame())
@@ -387,20 +418,34 @@ with tabs[2]:
     st.subheader("Jejak sumber setiap data")
     company_filter = st.selectbox("Perusahaan", ["Semua"] + sorted(evidence["nama_perusahaan"].unique()), key="source_filter")
     shown = evidence if company_filter == "Semua" else evidence[evidence["nama_perusahaan"] == company_filter]
-    st.dataframe(shown, use_container_width=True, hide_index=True)
+    st.dataframe(shown, use_container_width=True, hide_index=True,
+                 column_config={"url_sumber": st.column_config.LinkColumn("Buka sumber")})
 
 with tabs[3]:
-    st.subheader("Cari dan baca sumber publik")
+    st.subheader("Pembaruan sumber publik")
     company = st.text_input("Nama perusahaan", placeholder="Contoh: PT Antareja Mahada Makmur")
-    if st.button("Cari publikasi terbaru"):
-        try: st.session_state.news = discover_news(company)
-        except Exception as error: st.error(f"Pencarian gagal: {error}")
-    if st.session_state.get("news"):
-        st.dataframe(pd.DataFrame(st.session_state.news), use_container_width=True, hide_index=True)
-    url = st.text_input("URL halaman resmi yang akan dibaca")
-    if st.button("Baca halaman sumber"):
-        try: st.session_state.scraped = scrape_page(url)
-        except Exception as error: st.error(f"Halaman tidak dapat dibaca: {error}")
+    if st.button("Cari sumber publik", use_container_width=True):
+        if not company.strip():
+            st.error("Nama perusahaan wajib diisi.")
+        else:
+            results = []
+            errors = []
+            try: results.extend(discover_web_pages(company.strip()))
+            except Exception as error: errors.append(f"Pencarian halaman: {error}")
+            try: results.extend(discover_news(company.strip()))
+            except Exception as error: errors.append(f"Pencarian berita: {error}")
+            st.session_state.public_results = results
+            if errors: st.warning("; ".join(errors))
+    public_results = st.session_state.get("public_results", [])
+    if public_results:
+        result_df = pd.DataFrame(public_results).drop_duplicates(subset="URL")
+        st.dataframe(result_df, use_container_width=True, hide_index=True,
+                     column_config={"URL": st.column_config.LinkColumn("Buka berita/sumber")})
+        selected_title = st.selectbox("Sumber yang akan dibaca", result_df["Judul"].tolist())
+        selected_url = result_df[result_df["Judul"] == selected_title].iloc[0]["URL"]
+        if st.button("Baca sumber terpilih", use_container_width=True):
+            try: st.session_state.scraped = scrape_page(selected_url)
+            except Exception as error: st.error(f"Halaman tidak dapat dibaca: {error}")
     scraped = st.session_state.get("scraped")
     if scraped:
         st.markdown(f"**{scraped['judul']}**")
