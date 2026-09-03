@@ -10,6 +10,9 @@ Versi ini fokus pada informasi kualitatif yang tidak diduplikasi oleh tools anal
 - Hasil scraping baru selalu berstatus `Menunggu Verifikasi CRM`.
 - Data yang tidak ditemukan dibiarkan kosong.
 - Skor kemiripan bukan rating atau keputusan kredit.
+- Pilihan perusahaan awal dikosongkan; aplikasi tidak lagi otomatis memilih BUMA.
+- Debitur baru dapat dicari melalui publikasi web dan URL resmi, kemudian langsung dibandingkan dengan database peer.
+- Profil hasil ekstraksi web ditampilkan bersama sumber dan selalu diberi label sementara sampai diverifikasi CRM.
 
 ## Deploy Streamlit
 

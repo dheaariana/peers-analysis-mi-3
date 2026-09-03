@@ -157,9 +157,83 @@ def discover_news(company):
     url = f"https://news.google.com/rss/search?q={query}&hl=id&gl=ID&ceid=ID:id"
     response = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0 PEARL-MI3/1.0"})
     response.raise_for_status(); root = ET.fromstring(response.content)
-    return [{"Judul": item.findtext("title", ""), "Tanggal": item.findtext("pubDate", ""),
-             "URL": item.findtext("link", ""), "Status": "Bahan pencarian—belum tervalidasi"}
-            for item in root.findall("./channel/item")[:10]]
+    rows = []
+    for item in root.findall("./channel/item")[:10]:
+        source = item.find("source")
+        description = re.sub(r"<[^>]+>", " ", item.findtext("description", ""))
+        rows.append({"Judul": item.findtext("title", ""), "Ringkasan": re.sub(r"\s+", " ", description).strip(),
+                     "Tanggal": item.findtext("pubDate", ""),
+                     "Sumber": source.text if source is not None else "",
+                     "URL": item.findtext("link", ""), "Status": "Bahan pencarian—belum tervalidasi"})
+    return rows
+
+
+def extract_business_profile(company, news_rows, official_page=None):
+    """Create a provisional profile only from words found in retrieved public text."""
+    text_parts = []
+    sources = []
+    for row in news_rows:
+        text_parts.extend([row.get("Judul", ""), row.get("Ringkasan", "")])
+        sources.append({"Judul": row.get("Judul", ""), "Sumber": row.get("Sumber", ""),
+                        "Tanggal": row.get("Tanggal", ""), "URL": row.get("URL", "")})
+    if official_page:
+        text_parts.extend([official_page.get("judul", ""), official_page.get("teks", "")])
+        sources.insert(0, {"Judul": official_page.get("judul", ""), "Sumber": "Halaman resmi yang dimasukkan pengguna",
+                           "Tanggal": "", "URL": official_page.get("url", "")})
+    text = " ".join(text_parts).casefold()
+    profile = {"nama_perusahaan": company, **{parameter: "" for parameter in PARAMETERS}}
+
+    commodities = []
+    for words, label in [(["coal", "batubara"], "Batubara"), (["nickel", "nikel"], "Nikel"),
+                         (["copper", "tembaga"], "Tembaga"), (["gold", "emas"], "Emas")]:
+        if any(word in text for word in words): commodities.append(label)
+    if commodities:
+        profile["Komoditas"] = "; ".join(commodities)
+        subsectors = []
+        if "Batubara" in commodities: subsectors.append("Jasa pertambangan batubara")
+        if any(x != "Batubara" for x in commodities): subsectors.append("Jasa pertambangan mineral")
+        profile["Subsektor"] = "; ".join(subsectors)
+    if (any(word in text for word in ["mining contractor", "kontraktor pertambangan", "mining services contractor"])
+            or ("kontraktor" in text and "pertambangan" in text)):
+        profile["Peran usaha"] = "Kontraktor pertambangan"
+
+    service_map = [
+        (["overburden", "lapisan tanah penutup"], "Pengupasan lapisan tanah penutup"),
+        (["coal getting", "coal extraction", "ekstraksi batubara", "pengambilan batubara"], "Ekstraksi batubara"),
+        (["coal hauling", "hauling", "pengangkutan batubara"], "Pengangkutan"),
+        (["drilling", "pengeboran"], "Pengeboran"),
+        (["blasting", "peledakan"], "Peledakan"),
+        (["mine planning", "perencanaan tambang"], "Perencanaan tambang"),
+        (["heavy equipment rental", "penyewaan alat berat"], "Penyewaan alat berat"),
+        (["mine infrastructure", "mining infrastructure", "infrastruktur tambang"], "Infrastruktur tambang"),
+        (["rehabilitation", "rehabilitasi", "reclamation", "reklamasi"], "Rehabilitasi/reklamasi"),
+        (["port management", "operasi pelabuhan", "pengelolaan pelabuhan"], "Pengelolaan pelabuhan"),
+    ]
+    services = [label for words, label in service_map if any(word in text for word in words)]
+    if services: profile["Lingkup jasa"] = "; ".join(services)
+
+    # Contract and project facts are added only when an explicit duration/location is found.
+    duration = re.search(r"(?:selama|jangka waktu|periode|for)\s+(\d{1,2})\s+(?:tahun|years?)", text)
+    if duration: profile["Profil kontrak"] = f"Kontrak {duration.group(1)} tahun"
+    locations = []
+    for keyword, label in [("kalimantan", "Kalimantan"), ("sumatera", "Sumatera"),
+                           ("sulawesi", "Sulawesi"), ("papua", "Papua")]:
+        if keyword in text: locations.append(label)
+    if locations: profile["Wilayah operasi/proyek"] = "; ".join(locations)
+    return profile, pd.DataFrame(sources).drop_duplicates(subset=["URL"])
+
+
+def rank_provisional(profiles, target):
+    has_eligibility = bool(tokens(target.get("Subsektor", "")) and tokens(target.get("Peran usaha", "")))
+    if has_eligibility:
+        ranked = rank_peers(profiles, target)
+        if not ranked.empty: return ranked, "Peer disaring berdasarkan subsektor dan peran usaha hasil ekstraksi."
+    rows = []
+    for _, peer in profiles.iterrows():
+        score, coverage, _ = calculate_score(target, peer)
+        rows.append({**peer.to_dict(), "Skor kemiripan": score, "Cakupan data": coverage})
+    ranked = pd.DataFrame(rows).sort_values(["Skor kemiripan", "Cakupan data"], ascending=False)
+    return ranked, "Data target belum cukup untuk eligibility; daftar ini adalah kandidat awal dari database pilot."
 
 
 def excel_output(target, ranked, comparison, sources):
@@ -202,11 +276,58 @@ with tabs[0]:
     if profiles.empty:
         st.error("Belum ada bukti tervalidasi yang dapat digunakan.")
     else:
-        target_name = st.selectbox("Perusahaan target", sorted(profiles["nama_perusahaan"].unique()))
-        if st.button("Cari peer berdasarkan data", type="primary", use_container_width=True):
-            target = profiles[profiles["nama_perusahaan"] == target_name].iloc[0].to_dict()
-            ranked = rank_peers(profiles, target)
-            st.session_state.target = target; st.session_state.ranked = ranked
+        mode = st.radio("Sumber perusahaan target", ["Database terverifikasi", "Cari debitur baru dari web"], horizontal=True)
+        if st.session_state.get("last_search_mode") != mode:
+            for key in ["target", "ranked", "target_sources", "provisional", "search_note"]:
+                st.session_state.pop(key, None)
+            st.session_state.last_search_mode = mode
+        if mode == "Database terverifikasi":
+            options = ["— Pilih perusahaan —"] + sorted(profiles["nama_perusahaan"].unique())
+            target_name = st.selectbox("Perusahaan target", options, index=0)
+            if st.button("Cari peer berdasarkan data", type="primary", use_container_width=True):
+                if target_name == "— Pilih perusahaan —":
+                    st.error("Pilih perusahaan terlebih dahulu.")
+                else:
+                    target = profiles[profiles["nama_perusahaan"] == target_name].iloc[0].to_dict()
+                    ranked = rank_peers(profiles, target)
+                    st.session_state.target = target; st.session_state.ranked = ranked
+                    st.session_state.target_sources = evidence[evidence["nama_perusahaan"] == target_name]
+                    st.session_state.provisional = False
+                    st.session_state.search_note = "Peer dihitung dari database terverifikasi."
+        else:
+            new_company = st.text_input("Nama debitur baru", "", placeholder="Contoh: PT Antareja Mahada Makmur")
+            official_url = st.text_input("URL website/halaman resmi (opsional tetapi disarankan)", "",
+                                         placeholder="https://www.perusahaan.co.id/profil-atau-proyek")
+            st.caption("Sistem mencari publikasi, mengekstrak kata yang benar-benar ditemukan, lalu membandingkannya dengan database peer terverifikasi.")
+            if st.button("Cari data publik dan tampilkan peers", type="primary", use_container_width=True):
+                if not new_company.strip():
+                    st.error("Nama debitur wajib diisi.")
+                else:
+                    try:
+                        with st.spinner("Mencari dan membaca data publik..."):
+                            news_rows = []
+                            official_page = None
+                            search_errors = []
+                            try:
+                                news_rows = discover_news(new_company.strip())
+                            except Exception as news_error:
+                                search_errors.append(f"Pencarian publikasi: {news_error}")
+                            if official_url.strip():
+                                try:
+                                    official_page = scrape_page(official_url.strip())
+                                except Exception as page_error:
+                                    search_errors.append(f"Pembacaan URL resmi: {page_error}")
+                            if not news_rows and official_page is None:
+                                raise ValueError("Tidak ada sumber yang berhasil dibaca. " + "; ".join(search_errors))
+                            target, source_rows = extract_business_profile(new_company.strip(), news_rows, official_page)
+                            ranked, note = rank_provisional(profiles, target)
+                            if search_errors:
+                                note += " Sebagian sumber gagal dibaca: " + "; ".join(search_errors)
+                        st.session_state.target = target; st.session_state.ranked = ranked
+                        st.session_state.target_sources = source_rows
+                        st.session_state.provisional = True; st.session_state.search_note = note
+                    except Exception as error:
+                        st.error(f"Pencarian data publik gagal: {error}")
         target = st.session_state.get("target")
         ranked = st.session_state.get("ranked", pd.DataFrame())
         if target is None:
@@ -215,11 +336,21 @@ with tabs[0]:
             st.warning("Belum ada peer eligible dengan subsektor dan peran usaha yang sama berdasarkan bukti tersedia.")
         else:
             st.success(f"Hasil untuk {target['nama_perusahaan']}")
+            if st.session_state.get("provisional", False):
+                st.warning("Hasil sementara dari ekstraksi data publik. Periksa sumber dan verifikasi karakteristik target sebelum digunakan dalam NAK.")
+                detected = pd.DataFrame([{"Parameter": p, "Nilai terdeteksi": target.get(p, "") or "Belum ditemukan"}
+                                         for p in PARAMETERS])
+                st.dataframe(detected, use_container_width=True, hide_index=True)
+            st.info(st.session_state.get("search_note", ""))
             st.dataframe(ranked[["nama_perusahaan", "Lingkup jasa", "Komoditas", "Skor kemiripan", "Cakupan data"]],
                          use_container_width=True, hide_index=True,
                          column_config={"Skor kemiripan": st.column_config.ProgressColumn(min_value=0,max_value=100),
                                         "Cakupan data": st.column_config.ProgressColumn(min_value=0,max_value=100,format="%.1f%%")})
             st.caption("Skor menunjukkan kemiripan model bisnis berdasarkan bukti tersedia, bukan kualitas kredit.")
+            target_sources = st.session_state.get("target_sources", pd.DataFrame())
+            if isinstance(target_sources, pd.DataFrame) and not target_sources.empty:
+                with st.expander("Lihat sumber data target"):
+                    st.dataframe(target_sources, use_container_width=True, hide_index=True)
 
 with tabs[1]:
     target = st.session_state.get("target"); ranked = st.session_state.get("ranked", pd.DataFrame())
@@ -246,6 +377,9 @@ with tabs[1]:
         st.caption("Pernyataan di atas adalah pertanyaan analitis, bukan kesimpulan faktual. Kesimpulan harus didukung kontrak, laporan operasional, atau konfirmasi CRM.")
         source_names = {target["nama_perusahaan"], peer_name}
         source_rows = evidence[evidence["nama_perusahaan"].isin(source_names)]
+        provisional_sources = st.session_state.get("target_sources", pd.DataFrame())
+        if st.session_state.get("provisional", False) and isinstance(provisional_sources, pd.DataFrame):
+            source_rows = pd.concat([source_rows, provisional_sources], ignore_index=True, sort=False)
         st.download_button("Unduh hasil dan sumber", excel_output(target, ranked, comparison, source_rows),
                            file_name="PEARL_analisis_peer.xlsx", use_container_width=True)
 
