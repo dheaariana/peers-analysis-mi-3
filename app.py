@@ -1,7 +1,15 @@
 import io
+import ipaddress
+import re
+import socket
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import quote_plus, urlparse
 
 import pandas as pd
+import requests
 import streamlit as st
 
 
@@ -37,7 +45,7 @@ PROFILE_COLUMNS = [
     "primary_commodity", "contract_profile", "tariff_model", "customer_profile",
     "customer_concentration", "geography", "fleet_model", "fuel_cost_allocation",
     "growth_stage", "growth_pattern", "revenue_growth_band", "margin_driver",
-    "key_risk", "source", "source_period", "last_updated", "verification_status",
+    "key_risk", "source", "source_url", "source_period", "last_updated", "verification_status",
 ]
 
 # Higher weight is assigned to operating characteristics that directly shape mining-services economics.
@@ -93,6 +101,100 @@ def normalize_name(value):
     for token in ["pt.", "pt ", "tbk.", "tbk", ",", "."]:
         name = name.replace(token, " ")
     return " ".join(name.split())
+
+
+class VisibleTextParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.hidden = 0
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"script", "style", "noscript", "svg"}:
+            self.hidden += 1
+
+    def handle_endtag(self, tag):
+        if tag in {"script", "style", "noscript", "svg"} and self.hidden:
+            self.hidden -= 1
+
+    def handle_data(self, data):
+        if not self.hidden and data.strip():
+            self.parts.append(data.strip())
+
+
+def safe_public_url(url):
+    parsed = urlparse(str(url).strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False, "URL harus diawali http:// atau https://"
+    if parsed.hostname.casefold() in {"localhost", "metadata.google.internal"}:
+        return False, "Alamat lokal tidak diizinkan"
+    try:
+        for result in socket.getaddrinfo(parsed.hostname, parsed.port or 443):
+            address = ipaddress.ip_address(result[4][0])
+            if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
+                return False, "Alamat jaringan privat tidak diizinkan"
+    except (socket.gaierror, ValueError):
+        return False, "Nama domain tidak dapat diverifikasi"
+    return True, ""
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def scrape_public_page(url):
+    allowed, message = safe_public_url(url)
+    if not allowed:
+        raise ValueError(message)
+    response = requests.get(
+        url, timeout=12, allow_redirects=True,
+        headers={"User-Agent": "Mozilla/5.0 PEARL-MI3/1.0"}, stream=True,
+    )
+    response.raise_for_status()
+    final_allowed, final_message = safe_public_url(response.url)
+    if not final_allowed:
+        raise ValueError(f"Redirect ditolak: {final_message}")
+    content_type = response.headers.get("content-type", "").casefold()
+    if "html" not in content_type and "text" not in content_type:
+        raise ValueError("Versi ini hanya membaca halaman HTML/text; gunakan tautan halaman publikasi, bukan file PDF.")
+    body = response.raw.read(2_000_000, decode_content=True).decode(response.encoding or "utf-8", errors="ignore")
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", body, flags=re.I | re.S)
+    title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else urlparse(url).hostname
+    parser = VisibleTextParser()
+    parser.feed(body)
+    text = re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
+    return {"Judul": title, "URL": response.url, "Cuplikan": text[:1200],
+            "Diambil pada": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def discover_public_news(company_name):
+    query = quote_plus(f'"{company_name}" mining OR contract OR fleet OR revenue')
+    url = f"https://news.google.com/rss/search?q={query}&hl=id&gl=ID&ceid=ID:id"
+    response = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0 PEARL-MI3/1.0"})
+    response.raise_for_status()
+    root = ET.fromstring(response.content)
+    rows = []
+    for item in root.findall("./channel/item")[:10]:
+        source = item.find("source")
+        rows.append({
+            "Judul": item.findtext("title", default=""),
+            "Tanggal publikasi": item.findtext("pubDate", default=""),
+            "Sumber": source.text if source is not None else "",
+            "URL": item.findtext("link", default=""),
+            "Status": "Pending CRM Validation",
+        })
+    return rows
+
+
+def review_topics(text):
+    groups = {
+        "Kontrak/proyek": ["contract", "kontrak", "project", "proyek", "order book"],
+        "Fleet/capex": ["fleet", "armada", "alat berat", "equipment", "capex"],
+        "Pertumbuhan": ["growth", "tumbuh", "revenue", "pendapatan", "volume"],
+        "Pelanggan": ["customer", "pelanggan", "client", "mine owner"],
+        "Komoditas": ["coal", "batubara", "nickel", "nikel", "copper", "emas"],
+    }
+    lower = str(text).casefold()
+    found = [label for label, words in groups.items() if any(word in lower for word in words)]
+    return "; ".join(found) if found else "Tinjau profil usaha"
 
 
 def field_similarity(left, right):
@@ -211,6 +313,9 @@ with st.sidebar:
 master = load_master().copy()
 if profile_file is not None:
     incoming = pd.read_csv(profile_file, dtype=str).fillna("")
+    # Backward compatibility for the previous PEARL CSV version.
+    if "source_url" not in incoming.columns:
+        incoming["source_url"] = ""
     missing = set(PROFILE_COLUMNS) - set(incoming.columns)
     if missing:
         st.sidebar.error("Missing profile columns: " + ", ".join(sorted(missing)))
@@ -233,7 +338,7 @@ if portfolio_file is not None:
     except Exception as error:
         st.sidebar.error(f"Workbook could not be read: {error}")
 
-pages = st.tabs(["Portfolio map", "Peer finder", "Business-pattern diagnostic", "Maintain database", "Methodology"])
+pages = st.tabs(["Portfolio map", "Peer finder", "Business-pattern diagnostic", "Maintain database", "Methodology", "Pembaruan publik"])
 
 with pages[0]:
     st.subheader("Portfolio map in the format of the previous departmental database")
@@ -416,3 +521,75 @@ with pages[4]:
     **Step 4 — financial analysis:** CRM obtains the latest statements and compares margins, leverage, cash flow, and DSCR separately.
     """)
     st.info("A high peer score means 'operationally comparable', not 'financially healthy'. Missing fields reduce data coverage instead of being treated as a match.")
+
+with pages[5]:
+    st.subheader("Pembaruan dari sumber publik")
+    st.write("Cari publikasi terbaru dan baca halaman sumber. Hasil scraping tidak langsung mengubah peer profile sebelum ditinjau CRM.")
+    current_target = st.session_state.get("analysis_target", {})
+    default_company = current_target.get("company_name", "") if current_target else ""
+    update_company = st.text_input("Nama perusahaan", value=default_company, key="update_company")
+
+    c1, c2 = st.columns(2)
+    if c1.button("Cari publikasi terbaru", use_container_width=True):
+        if not update_company.strip():
+            st.error("Nama perusahaan wajib diisi.")
+        else:
+            try:
+                st.session_state.news_results = discover_public_news(update_company.strip())
+            except Exception as error:
+                st.error(f"Pencarian publikasi gagal: {error}")
+
+    matched_source = master[master["company_name"].map(normalize_name) == normalize_name(update_company)]
+    registered_url = ""
+    if not matched_source.empty:
+        registered_url = str(matched_source.iloc[-1].get("source_url", ""))
+    source_urls = st.text_area(
+        "URL sumber resmi/publik (satu URL per baris)", value=registered_url,
+        placeholder="https://www.perusahaan.co.id/news/kontrak-terbaru",
+        help="Utamakan website perusahaan, keterbukaan informasi, laporan tahunan, atau sumber resmi pelanggan/proyek.",
+    )
+    if c2.button("Baca halaman sumber", use_container_width=True):
+        urls = [item.strip() for item in source_urls.splitlines() if item.strip()]
+        if not urls:
+            st.error("Masukkan minimal satu URL sumber.")
+        else:
+            scraped, errors = [], []
+            for url in urls[:5]:
+                try:
+                    item = scrape_public_page(url)
+                    item["Topik untuk ditinjau"] = review_topics(item["Cuplikan"])
+                    item["Status"] = "Pending CRM Validation"
+                    scraped.append(item)
+                except Exception as error:
+                    errors.append(f"{url}: {error}")
+            st.session_state.scraped_results = scraped
+            if errors:
+                st.warning("Sebagian sumber tidak dapat dibaca:\n\n" + "\n\n".join(errors))
+
+    news_results = st.session_state.get("news_results", [])
+    if news_results:
+        st.markdown("#### Publikasi yang ditemukan")
+        st.dataframe(pd.DataFrame(news_results), use_container_width=True, hide_index=True)
+        st.caption("Daftar ini berfungsi sebagai discovery. Buka dan verifikasi publikasinya sebelum dipakai dalam analisis kredit.")
+
+    scraped_results = st.session_state.get("scraped_results", [])
+    if scraped_results:
+        st.markdown("#### Hasil pembacaan sumber")
+        scraped_df = pd.DataFrame(scraped_results)
+        st.dataframe(scraped_df, use_container_width=True, hide_index=True)
+        selected_url = st.selectbox("Sumber yang akan dicatat", scraped_df["URL"].tolist())
+        if st.button("Catat sebagai sumber pending verification"):
+            existing = master[master["company_name"].map(normalize_name) == normalize_name(update_company)]
+            profile = existing.iloc[-1].to_dict() if not existing.empty else {column: "" for column in PROFILE_COLUMNS}
+            profile["company_name"] = update_company.strip()
+            profile["source_url"] = selected_url
+            selected_row = scraped_df[scraped_df["URL"] == selected_url].iloc[0]
+            profile["source"] = selected_row["Judul"]
+            profile["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            profile["verification_status"] = "Pending CRM Validation"
+            st.session_state.session_profiles.append({column: str(profile.get(column, "")) for column in PROFILE_COLUMNS})
+            st.session_state.public_source_saved = True
+            st.rerun()
+
+    if st.session_state.pop("public_source_saved", False):
+        st.success("Sumber telah dicatat sebagai Pending CRM Validation. Tinjau dan lengkapi profil pada Maintain database, lalu unduh CSV terbaru.")

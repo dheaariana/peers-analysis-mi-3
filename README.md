@@ -15,6 +15,9 @@ Focused pilot for coal-related mining services. The application combines the str
 - Lets the PIC update the peer database without editing Python code.
 - Can add a new target to the current session and export it into the updated CSV.
 - Exports a peer shortlist and comparison workbook for CRM follow-up.
+- Searches recent public publications using the company name.
+- Scrapes user-approved public/official HTML pages and records the source as `Pending CRM Validation`.
+- Never overwrites structured peer fields automatically; CRM reviews the evidence first.
 
 ## Streamlit deployment
 
@@ -40,3 +43,7 @@ The bundled peer profiles are illustrative and marked `Pending CRM Validation`. 
 ## Peer methodology
 
 Eligibility requires a comparable mining-contractor role and subsector. Weighted matching then considers service scope, commodity, contract profile, tariff model, customer profile/concentration, geography, fleet model, fuel-cost allocation, growth stage, growth pattern, and revenue-growth band. The result measures operational comparability only; CRM still obtains and analyzes the latest financial statements separately.
+
+## Public-source update workflow
+
+Open `Pembaruan publik`, enter the company name, search recent publications, and paste up to five official/public page URLs. PEARL extracts visible text, highlights topics requiring review, and allows the CRM to record one source with `Pending CRM Validation` status. Complete or correct the structured profile in `Maintain database`, download the latest CSV, and replace `peer_database.csv` in GitHub to persist the update.
