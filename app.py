@@ -87,6 +87,14 @@ def text_tokens(value):
     }
 
 
+def normalize_name(value):
+    """Normalize legal prefixes/punctuation so the same company is not selected as its own peer."""
+    name = str(value).casefold()
+    for token in ["pt.", "pt ", "tbk.", "tbk", ",", "."]:
+        name = name.replace(token, " ")
+    return " ".join(name.split())
+
+
 def field_similarity(left, right):
     a, b = text_tokens(left), text_tokens(right)
     if not a or not b:
@@ -126,7 +134,7 @@ def eligibility_reason(target, candidate):
 def rank_candidates(database, target):
     rows = []
     for _, candidate in database.iterrows():
-        if candidate["company_name"].casefold() == str(target["company_name"]).casefold():
+        if normalize_name(candidate["company_name"]) == normalize_name(target["company_name"]):
             continue
         eligible, reason = eligibility_reason(target, candidate)
         if not eligible:
@@ -210,6 +218,13 @@ if profile_file is not None:
         master = incoming[PROFILE_COLUMNS]
         st.sidebar.success("Updated peer profile loaded")
 
+if "session_profiles" not in st.session_state:
+    st.session_state.session_profiles = []
+if st.session_state.session_profiles:
+    additions = pd.DataFrame(st.session_state.session_profiles)
+    master = pd.concat([master, additions[PROFILE_COLUMNS]], ignore_index=True)
+    master = master.drop_duplicates(subset="company_name", keep="last")
+
 portfolio = pd.DataFrame(columns=PORTFOLIO_COLUMNS)
 if portfolio_file is not None:
     try:
@@ -225,54 +240,96 @@ with pages[0]:
     if portfolio.empty:
         st.info("Upload an approved/sanitized workbook to reproduce the portfolio view. The app recognizes the `Input Data` format.")
     else:
-        coal = portfolio[portfolio["coal_related"].astype(str).str.casefold().isin(["ya", "y", "yes"])].copy()
+        mi3 = portfolio[portfolio["unit"].astype(str).str.contains("MINING & ENERGY", case=False, na=False)].copy()
+        coal = mi3[mi3["coal_related"].astype(str).str.casefold().isin(["ya", "y", "yes"])].copy()
         contractors = coal[coal["coal_role"].astype(str).str.contains("kontraktor", case=False, na=False)]
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Portfolio rows", f"{len(portfolio):,}")
-        m2.metric("Coal-related", f"{len(coal):,}")
-        m3.metric("Coal contractors", f"{len(contractors):,}")
-        m4.metric("Unique contractor debtors", f"{contractors.company_name.nunique():,}")
+        m1.metric("Baris portofolio MI3", f"{len(mi3):,}")
+        m2.metric("Coal-related MI3", f"{len(coal):,}")
+        m3.metric("Baris kontraktor", f"{len(contractors):,}")
+        m4.metric("Debitur kontraktor unik", f"{contractors.company_name.nunique():,}")
         summary = (coal.groupby("coal_role", dropna=False)["company_name"].nunique()
                    .sort_values(ascending=False).rename("Unique debtors").reset_index())
         st.dataframe(summary, use_container_width=True, hide_index=True)
         st.dataframe(contractors[PORTFOLIO_COLUMNS], use_container_width=True, hide_index=True, height=360)
 
 with pages[1]:
-    st.subheader("Find operationally comparable companies")
-    mode = st.radio("Target input", ["Select from peer database", "Enter a new target"], horizontal=True)
-    if mode == "Select from peer database":
-        chosen = st.selectbox("Target company", sorted(master["company_name"].unique()))
-        target = master[master["company_name"] == chosen].iloc[0].to_dict()
+    st.subheader("Cari perusahaan pembanding yang sepadan")
+    target_sources = ["Pilih dari database peer", "Masukkan perusahaan baru"]
+    mi3_contractors = pd.DataFrame()
+    if not portfolio.empty:
+        mi3_contractors = portfolio[
+            portfolio["unit"].astype(str).str.contains("MINING & ENERGY", case=False, na=False)
+            & portfolio["coal_role"].astype(str).str.contains("kontraktor", case=False, na=False)
+        ]
+        if not mi3_contractors.empty:
+            target_sources.insert(1, "Pilih debitur dari workbook")
+    mode = st.radio("Sumber target", target_sources, horizontal=True)
+
+    blank = {column: "" for column in PROFILE_COLUMNS}
+    if mode == "Pilih dari database peer":
+        chosen = st.selectbox("Perusahaan target", sorted(master["company_name"].unique()))
+        initial = master[master["company_name"] == chosen].iloc[0].to_dict()
+        manual_profile = False
+    elif mode == "Pilih debitur dari workbook":
+        chosen = st.selectbox("Debitur target", sorted(mi3_contractors["company_name"].dropna().unique()))
+        matched = master[master["company_name"].map(normalize_name) == normalize_name(chosen)]
+        initial = matched.iloc[0].to_dict() if not matched.empty else blank.copy()
+        initial.update({"company_name": chosen, "sector": "Mining & Energy",
+                        "subsector": "Coal Mining Services", "business_role": "Kontraktor"})
+        manual_profile = True
+        if matched.empty:
+            st.info("Debitur ditemukan di workbook, tetapi profil operasionalnya belum ada. Lengkapi informasi di bawah sebelum mencari peers.")
     else:
-        st.caption("Complete the business pattern first. The tool does not need the target to already exist in its database.")
-        target = {column: "" for column in PROFILE_COLUMNS}
-        target["company_name"] = st.text_input("Company name", "PT Bukit Makmur Mandiri Utama")
+        initial = blank.copy()
+        initial["company_name"] = st.text_input("Nama perusahaan baru", "", placeholder="Contoh: PT ABC Mining Services")
+        initial.update({"sector": "Mining & Energy", "subsector": "Coal Mining Services", "business_role": "Kontraktor"})
+        manual_profile = True
+
+    target = initial.copy()
+    if manual_profile:
+        st.caption("Kosongkan informasi yang belum diketahui. Data kosong akan menurunkan Data Coverage, bukan dianggap cocok.")
         c1, c2 = st.columns(2)
-        target["sector"] = c1.selectbox("Sector", ["Mining & Energy"])
-        target["subsector"] = c2.selectbox("Subsector", ["Coal Mining Services", "Diversified Mining Services"])
+        target["sector"] = c1.selectbox("Sektor", ["Mining & Energy"])
+        subsectors = ["Coal Mining Services", "Diversified Mining Services"]
+        subsector_index = subsectors.index(initial.get("subsector")) if initial.get("subsector") in subsectors else 0
+        target["subsector"] = c2.selectbox("Subsektor", subsectors, index=subsector_index)
         target["business_role"] = "Kontraktor"
         inputs = {
-            "service_scope": ("Service scope", "Overburden removal; Coal getting; Hauling"),
-            "primary_commodity": ("Primary commodity", "Thermal coal"),
-            "contract_profile": ("Contract profile", "Long-term; Volume based"),
-            "tariff_model": ("Tariff model", "Per bcm; Per ton"),
-            "customer_profile": ("Customer profile", "Coal mine owner"),
-            "customer_concentration": ("Customer concentration", "Medium"),
-            "geography": ("Operating geography", "Kalimantan"),
-            "fleet_model": ("Fleet model", "Owned fleet"),
-            "fuel_cost_allocation": ("Fuel-cost allocation", "Pass-through / customer supplied"),
-            "growth_stage": ("Growth stage", "Mature expansion"),
-            "growth_pattern": ("Growth pattern", "Contract-backed fleet expansion"),
-            "revenue_growth_band": ("Revenue growth band", "Moderate"),
+            "service_scope": "Lingkup jasa (pisahkan dengan titik koma)",
+            "primary_commodity": "Komoditas utama",
+            "contract_profile": "Profil kontrak",
+            "tariff_model": "Model tarif",
+            "customer_profile": "Profil pelanggan",
+            "customer_concentration": "Konsentrasi pelanggan",
+            "geography": "Wilayah operasi",
+            "fleet_model": "Model fleet",
+            "fuel_cost_allocation": "Pembebanan biaya BBM",
+            "growth_stage": "Tahap pertumbuhan",
+            "growth_pattern": "Pola pertumbuhan",
+            "revenue_growth_band": "Kelompok pertumbuhan pendapatan",
         }
         cols = st.columns(2)
-        for index, (field, (label, default)) in enumerate(inputs.items()):
-            target[field] = cols[index % 2].text_input(label, default)
+        for index, (field, label) in enumerate(inputs.items()):
+            target[field] = cols[index % 2].text_input(label, value=str(initial.get(field, "")), key=f"target_{mode}_{field}")
 
-    ranked = rank_candidates(master, target)
-    if ranked.empty:
-        st.warning("No eligible contractor peer found. Add/enrich candidates in Maintain database.")
+    run_analysis = st.button("Cari peers", type="primary", use_container_width=True)
+    if run_analysis:
+        if not str(target.get("company_name", "")).strip():
+            st.error("Nama perusahaan wajib diisi.")
+        else:
+            st.session_state.analysis_target = target
+            st.session_state.analysis_ranked = rank_candidates(master, target)
+
+    ranked = st.session_state.get("analysis_ranked", pd.DataFrame())
+    analysis_target = st.session_state.get("analysis_target")
+    if analysis_target is None:
+        st.info("Lengkapi profil target, lalu tekan **Cari peers**.")
+    elif ranked.empty:
+        st.warning("Belum ada kandidat peer yang memenuhi syarat. Tambahkan atau perkaya profil pada menu Maintain database.")
     else:
+        target = analysis_target
+        st.success(f"Hasil peer untuk: {target['company_name']}")
         count_options = list(range(1, min(10, len(ranked)) + 1))
         count = st.select_slider("Number of candidates", options=count_options,
                                  value=min(5, len(ranked)))
@@ -287,11 +344,20 @@ with pages[1]:
             },
         )
         st.caption("Peer score = operational comparability. It is not a rating, financial-performance score, or credit decision.")
+        already_saved = any(master["company_name"].map(normalize_name) == normalize_name(target["company_name"]))
+        if not already_saved and st.button("Tambahkan target ke database sesi"):
+            saved_target = {column: str(target.get(column, "")) for column in PROFILE_COLUMNS}
+            saved_target["verification_status"] = saved_target.get("verification_status") or "Pending CRM Validation"
+            st.session_state.session_profiles.append(saved_target)
+            st.session_state.profile_saved_message = True
+            st.rerun()
 
 with pages[2]:
     st.subheader("Explain why performance can differ")
-    if "ranked" not in locals() or ranked.empty:
-        st.info("Run Peer finder first.")
+    ranked = st.session_state.get("analysis_ranked", pd.DataFrame())
+    target = st.session_state.get("analysis_target")
+    if target is None or ranked.empty:
+        st.info("Jalankan pencarian pada menu Peer finder terlebih dahulu.")
     else:
         selected = st.selectbox("Comparison peer", ranked.head(10)["company_name"].tolist())
         peer = ranked[ranked["company_name"] == selected].iloc[0].to_dict()
@@ -326,6 +392,8 @@ with pages[2]:
 
 with pages[3]:
     st.subheader("Maintain the qualitative peer database")
+    if st.session_state.pop("profile_saved_message", False):
+        st.success("Target telah ditambahkan ke database sesi. Unduh CSV terbaru agar dapat disimpan permanen di GitHub.")
     st.write("CRM/PIC can add a company, update public-source profiles, and validate the record without changing Python code.")
     edited = st.data_editor(master, use_container_width=True, hide_index=True, num_rows="dynamic", height=500)
     c1, c2 = st.columns(2)

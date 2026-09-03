@@ -7,9 +7,13 @@ Focused pilot for coal-related mining services. The application combines the str
 - Imports the existing `Input Data` workbook structure for portfolio mapping.
 - Filters coal-related contractors as the pilot population.
 - Accepts any new target company through manual business-pattern profiling.
+- Lets users select a Mining & Energy contractor directly from an imported workbook.
+- Starts unknown-company profiles blank, so another company's assumptions are never reused.
+- Requires the user to press `Cari peers` before results are recalculated.
 - Selects peers based on operating model and growth pattern—not loan size or financial ratios.
 - Explains why margin/performance may differ across otherwise similar contractors.
 - Lets the PIC update the peer database without editing Python code.
+- Can add a new target to the current session and export it into the updated CSV.
 - Exports a peer shortlist and comparison workbook for CRM follow-up.
 
 ## Streamlit deployment
