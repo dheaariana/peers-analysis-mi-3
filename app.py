@@ -1,180 +1,350 @@
 import io
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 
-st.set_page_config(page_title="PEARL Mining Services", page_icon="◈", layout="wide")
-st.markdown("""
-<style>
-.stApp{background:#f3f6fb;color:#172033}.block-container{max-width:1320px;padding-top:1.2rem}
-.topline{border-left:6px solid #f4b000;background:#07366d;color:white;padding:18px 22px;border-radius:5px 16px 16px 5px;margin-bottom:16px}
-.topline h1{font-size:1.9rem;margin:0 0 4px}.topline p{margin:0;color:#d9e8fb}
-.pill{display:inline-block;background:#e8f2ff;color:#06417f;padding:4px 9px;border-radius:99px;font-size:.78rem;font-weight:700}
-[data-testid="stMetric"]{background:#fff;border:1px solid #dfe7f1;padding:12px;border-radius:12px}
-</style>
-""", unsafe_allow_html=True)
 
-ROOT_DIR=Path(__file__).parent
-DATA_PATH=ROOT_DIR/"mining_services_database.csv"
-# Backward-compatible fallback for an older package structure.
-if not DATA_PATH.exists():
-    DATA_PATH=ROOT_DIR/"data"/"mining_services_database.csv"
+st.set_page_config(page_title="PEARL MI3", page_icon="◈", layout="wide")
 
-FIELDS={
-    "service_scope":("Service scope",25),
-    "primary_commodity":("Commodity",15),
-    "contract_profile":("Contract profile",15),
-    "customer_profile":("Customer profile",15),
-    "geography":("Operating geography",10),
-    "operating_model":("Operating model",10),
-    "revenue_driver":("Revenue driver",5),
-    "capex_intensity":("Capex intensity",5),
-}
+st.markdown(
+    """
+    <style>
+    .stApp {background:#f3f6fb;color:#172033}
+    .block-container {max-width:1380px;padding-top:1.1rem}
+    .hero {background:linear-gradient(120deg,#07366d,#0d5da5);color:white;
+           padding:22px 28px;border-radius:8px 22px 22px 8px;border-left:7px solid #f4b000}
+    .hero h1 {margin:.2rem 0;font-size:2rem}.hero p {margin:0;color:#dcecff}
+    .tag {display:inline-block;background:#eaf3ff;color:#07447f;padding:4px 10px;
+          border-radius:99px;font-size:.78rem;font-weight:700}
+    [data-testid="stMetric"] {background:white;border:1px solid #dfe7f1;padding:12px;border-radius:12px}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-NAK_QUESTIONS=[
-    "Apa lingkup pekerjaan utama: full mining services atau hanya sebagian aktivitas?",
-    "Apa komoditas dan karakteristik tambang yang dilayani?",
-    "Bagaimana struktur tarif: per bcm, per ton, lump sum, atau cost-plus?",
-    "Berapa tenor kontrak dan remaining contract period?",
-    "Apakah terdapat minimum volume, escalation clause, atau fuel pass-through?",
-    "Seberapa tinggi konsentrasi pelanggan dan site?",
-    "Bagaimana ownership, usia, utilisasi, dan kebutuhan replacement fleet?",
-    "Siapa yang menanggung fuel, spare parts, mobilization, dan site infrastructure?",
-    "Bagaimana historical achievement volume terhadap target kontrak?",
-    "Apa penyebab utama perbedaan margin terhadap peers?",
+ROOT = Path(__file__).parent
+MASTER_PATH = ROOT / "peer_database.csv"
+
+PORTFOLIO_COLUMNS = [
+    "segment", "sector", "adjusted_sector", "cif", "company_name", "unit", "kol",
+    "restructuring", "bade_rp_m", "limit_rp_m", "ckpn_pct", "coal_related",
+    "mine_location", "coal_revenue_pct", "coal_role", "group_support",
 ]
 
+PROFILE_COLUMNS = [
+    "company_name", "sector", "subsector", "business_role", "service_scope",
+    "primary_commodity", "contract_profile", "tariff_model", "customer_profile",
+    "customer_concentration", "geography", "fleet_model", "fuel_cost_allocation",
+    "growth_stage", "growth_pattern", "revenue_growth_band", "margin_driver",
+    "key_risk", "source", "source_period", "last_updated", "verification_status",
+]
+
+# Higher weight is assigned to operating characteristics that directly shape mining-services economics.
+SCORING_FIELDS = {
+    "subsector": ("Subsector", 5),
+    "business_role": ("Business role", 10),
+    "service_scope": ("Service scope", 15),
+    "primary_commodity": ("Commodity", 8),
+    "contract_profile": ("Contract profile", 10),
+    "tariff_model": ("Tariff / revenue model", 10),
+    "customer_profile": ("Customer profile", 7),
+    "customer_concentration": ("Customer concentration", 5),
+    "geography": ("Operating geography", 5),
+    "fleet_model": ("Fleet / operating model", 8),
+    "fuel_cost_allocation": ("Fuel-cost allocation", 5),
+    "growth_stage": ("Growth stage", 5),
+    "growth_pattern": ("Growth pattern", 5),
+    "revenue_growth_band": ("Revenue-growth band", 2),
+}
+
+EXCEL_MAP = {
+    "Segmen": "segment",
+    "Sektor": "sector",
+    "Sektor Penyesuaian": "adjusted_sector",
+    "CIF": "cif",
+    "Debitur": "company_name",
+    "Unit": "unit",
+    "KOL": "kol",
+    "RESTRU": "restructuring",
+    "Bade (Rp M)": "bade_rp_m",
+    "Limit (Rp M)": "limit_rp_m",
+    "%CKPN": "ckpn_pct",
+    "Coal Related Industry \n(Y/T)": "coal_related",
+    "Lokasi Tambang \n(Indonesia / Luar)": "mine_location",
+    "% Coal Related": "coal_revenue_pct",
+    "Tagging Debitur Batubara\n(Pemegang IUP/ Kontraktor/ Trader/ Transporter/Holding Non Operating/Holding Operating)": "coal_role",
+    "Klasifikasi Dukungan Group Usaha": "group_support",
+}
+
+
+def text_tokens(value):
+    missing = {"", "nan", "n/a", "na", "unknown", "undetermined", "belum diisi"}
+    return {
+        item.strip().casefold()
+        for item in str(value).replace("|", ";").split(";")
+        if item.strip().casefold() not in missing
+    }
+
+
+def field_similarity(left, right):
+    a, b = text_tokens(left), text_tokens(right)
+    if not a or not b:
+        return None
+    return 100 * len(a & b) / len(a | b)
+
+
+def peer_score(target, candidate):
+    points = 0.0
+    used_weight = 0.0
+    details = []
+    for field, (label, weight) in SCORING_FIELDS.items():
+        score = field_similarity(target.get(field, ""), candidate.get(field, ""))
+        if score is None:
+            details.append({"Parameter": label, "Target": target.get(field, ""),
+                            "Peer": candidate.get(field, ""), "Match": "Need data", "Weight": weight})
+            continue
+        points += score * weight
+        used_weight += weight
+        details.append({"Parameter": label, "Target": target.get(field, ""),
+                        "Peer": candidate.get(field, ""), "Match": f"{score:.0f}%", "Weight": weight})
+    final = points / used_weight if used_weight else 0.0
+    coverage = used_weight / sum(weight for _, weight in SCORING_FIELDS.values()) * 100
+    return round(final, 1), round(coverage, 1), details
+
+
+def eligibility_reason(target, candidate):
+    if str(candidate.get("business_role", "")).casefold() != "kontraktor":
+        return False, "Business role is not Kontraktor"
+    target_subsector = text_tokens(target.get("subsector", ""))
+    peer_subsector = text_tokens(candidate.get("subsector", ""))
+    if target_subsector and peer_subsector and not (target_subsector & peer_subsector):
+        return False, "Different mining-services subsector"
+    return True, "Eligible operational peer"
+
+
+def rank_candidates(database, target):
+    rows = []
+    for _, candidate in database.iterrows():
+        if candidate["company_name"].casefold() == str(target["company_name"]).casefold():
+            continue
+        eligible, reason = eligibility_reason(target, candidate)
+        if not eligible:
+            continue
+        score, coverage, _ = peer_score(target, candidate)
+        rows.append({**candidate.to_dict(), "peer_score": score,
+                     "data_coverage": coverage, "eligibility": reason})
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["peer_score", "data_coverage"], ascending=False)
+
+
+def read_portfolio_excel(uploaded):
+    book = pd.ExcelFile(uploaded)
+    sheet = "Input Data" if "Input Data" in book.sheet_names else book.sheet_names[0]
+    # The departmental workbook has its field names on Excel row 2.
+    raw = pd.read_excel(book, sheet_name=sheet, header=1)
+    raw.columns = [str(c).strip() for c in raw.columns]
+    normalized_map = {str(k).strip(): v for k, v in EXCEL_MAP.items()}
+    available = {c: normalized_map[c] for c in raw.columns if c in normalized_map}
+    if "Debitur" not in raw.columns:
+        # Also accept a clean extract whose first row is already the header.
+        raw = pd.read_excel(book, sheet_name=sheet, header=0)
+        raw.columns = [str(c).strip() for c in raw.columns]
+        available = {c: normalized_map[c] for c in raw.columns if c in normalized_map}
+    result = raw[list(available)].rename(columns=available)
+    for column in PORTFOLIO_COLUMNS:
+        if column not in result:
+            result[column] = ""
+    result = result[PORTFOLIO_COLUMNS]
+    result = result[result["company_name"].notna()].copy()
+    result["company_name"] = result["company_name"].astype(str).str.strip()
+    return result
+
+
 @st.cache_data(show_spinner=False)
-def base_data():
-    return pd.read_csv(DATA_PATH).fillna("Undetermined")
+def load_master():
+    data = pd.read_csv(MASTER_PATH, dtype=str).fillna("")
+    for column in PROFILE_COLUMNS:
+        if column not in data:
+            data[column] = ""
+    return data[PROFILE_COLUMNS]
 
-def tokens(value):
-    return {x.strip().lower() for x in str(value).split(";") if x.strip() and x.strip().lower()!="undetermined"}
 
-def similarity(a,b):
-    left,right=tokens(a),tokens(b)
-    if not left or not right:
-        return 50.0
-    return 100*len(left&right)/len(left|right)
-
-def compare(target,candidate):
-    detail=[];total=0
-    for field,(label,weight) in FIELDS.items():
-        score=similarity(target[field],candidate[field])
-        total+=score*weight/100
-        shared=tokens(target[field])&tokens(candidate[field])
-        detail.append((label,score,", ".join(sorted(shared)) or "Needs confirmation"))
-    return total,detail
-
-def rank_peers(df,target_name):
-    target=df[df.company_name==target_name].iloc[0]
-    rows=[]
-    for _,candidate in df[df.company_name!=target_name].iterrows():
-        # Mining Contractor and Diversified Mining Services remain eligible, but exact model receives a bonus.
-        score,detail=compare(target,candidate)
-        model_bonus=5 if candidate.subsector==target.subsector else 0
-        final=min(100,score+model_bonus)
-        strongest=sorted(detail,key=lambda x:x[1],reverse=True)[:3]
-        weakest=sorted(detail,key=lambda x:x[1])[:2]
-        rows.append({
-            **candidate.to_dict(),
-            "peer_score":round(final,1),
-            "comparable_because":"; ".join(f"{x[0]}: {x[2]}" for x in strongest),
-            "key_differences":"; ".join(x[0] for x in weakest if x[1]<100) or "No material difference identified",
-        })
-    return pd.DataFrame(rows).sort_values("peer_score",ascending=False).reset_index(drop=True),target
-
-def margin_explanation(target,peer):
-    notes=[]
-    if target.contract_profile!=peer.contract_profile:
-        notes.append("Different contract mix may change pricing certainty, mobilization burden, and margin volatility.")
-    if target.customer_concentration!=peer.customer_concentration:
-        notes.append("Different customer concentration may affect bargaining power and contract-renewal risk.")
-    if target.primary_commodity!=peer.primary_commodity:
-        notes.append("Different commodity exposure may lead to different mine characteristics, equipment needs, and utilization.")
-    if target.operating_model!=peer.operating_model:
-        notes.append("Different fleet/subcontracting models may change fixed-cost intensity and operating leverage.")
-    if target.geography!=peer.geography:
-        notes.append("Different operating geography may affect labor, logistics, mobilization, and regulatory costs.")
-    return notes or ["Public business-pattern data does not yet explain the margin difference; CRM validation is required."]
-
-def excel_output(target,ranked):
-    stream=io.BytesIO()
-    with pd.ExcelWriter(stream,engine="xlsxwriter") as writer:
-        pd.DataFrame([target]).to_excel(writer,sheet_name="Target",index=False)
-        ranked.to_excel(writer,sheet_name="Peer Shortlist",index=False)
-        pd.DataFrame({"NAK review question":NAK_QUESTIONS}).to_excel(writer,sheet_name="NAK Checklist",index=False)
+def excel_download(target, shortlist, comparison=None):
+    stream = io.BytesIO()
+    with pd.ExcelWriter(stream, engine="xlsxwriter") as writer:
+        pd.DataFrame([target]).to_excel(writer, sheet_name="Target Profile", index=False)
+        shortlist.to_excel(writer, sheet_name="Peer Shortlist", index=False)
+        if comparison is not None:
+            comparison.to_excel(writer, sheet_name="Comparison", index=False)
+        pd.DataFrame({"Interpretation": [
+            "Peer score measures operational comparability, not creditworthiness.",
+            "Financial statements must be obtained and reviewed separately by CRM.",
+            "Low data coverage means the result requires further profiling.",
+        ]}).to_excel(writer, sheet_name="Notes", index=False)
     return stream.getvalue()
 
-st.markdown('<div class="topline"><span class="pill">MULTI INDUSTRIES 3 · PILOT</span><h1>PEARL Mining Services</h1><p>Peer mapping and business-pattern analysis for mining contractors</p></div>',unsafe_allow_html=True)
+
+st.markdown(
+    '<div class="hero"><span class="tag">COMMERCIAL RISK 3 · MI3 PILOT</span>'
+    '<h1>PEARL · Coal Mining Contractor Peer Finder</h1>'
+    '<p>Portfolio mapping, operational peer screening, and business-pattern diagnostics</p></div>',
+    unsafe_allow_html=True,
+)
 
 with st.sidebar:
-    st.subheader("Purpose")
-    st.write("Find operationally comparable mining-services companies and explain why their performance may differ.")
-    st.warning("Use public/approved information only. Every profile remains subject to CRM validation.")
-    uploaded=st.file_uploader("Use updated database (CSV)",type=["csv"])
+    st.subheader("Data source")
+    st.caption("Default database contains only illustrative/public profiles.")
+    portfolio_file = st.file_uploader("Import approved portfolio workbook", type=["xlsx", "xls"])
+    profile_file = st.file_uploader("Use updated peer profile (CSV)", type=["csv"])
+    st.warning("Do not upload confidential Bank/debtor data to a public deployment. Use only an internally approved environment or sanitized extract.")
 
-df=base_data().copy()
-if uploaded is not None:
+master = load_master().copy()
+if profile_file is not None:
+    incoming = pd.read_csv(profile_file, dtype=str).fillna("")
+    missing = set(PROFILE_COLUMNS) - set(incoming.columns)
+    if missing:
+        st.sidebar.error("Missing profile columns: " + ", ".join(sorted(missing)))
+    else:
+        master = incoming[PROFILE_COLUMNS]
+        st.sidebar.success("Updated peer profile loaded")
+
+portfolio = pd.DataFrame(columns=PORTFOLIO_COLUMNS)
+if portfolio_file is not None:
     try:
-        incoming=pd.read_csv(uploaded).fillna("Undetermined")
-        missing=set(df.columns)-set(incoming.columns)
-        if missing: st.error("Missing database columns: "+", ".join(sorted(missing)))
-        else: df=incoming[df.columns];st.sidebar.success("Updated database loaded")
+        portfolio = read_portfolio_excel(portfolio_file)
+        st.sidebar.success(f"{len(portfolio):,} portfolio rows imported")
     except Exception as error:
-        st.sidebar.error(f"Could not read CSV: {error}")
+        st.sidebar.error(f"Workbook could not be read: {error}")
 
-left,right=st.columns([3,1])
-with left:
-    target_name=st.selectbox("Target company",sorted(df.company_name.unique()),index=sorted(df.company_name.unique()).index("PT Bukit Makmur Mandiri Utama") if "PT Bukit Makmur Mandiri Utama" in sorted(df.company_name.unique()) else 0)
-with right:
-    peer_count=st.selectbox("Number of candidates",[3,5,7,10],index=2)
+pages = st.tabs(["Portfolio map", "Peer finder", "Business-pattern diagnostic", "Maintain database", "Methodology"])
 
-ranked,target=rank_peers(df,target_name)
-shortlist=ranked.head(peer_count).copy()
+with pages[0]:
+    st.subheader("Portfolio map in the format of the previous departmental database")
+    if portfolio.empty:
+        st.info("Upload an approved/sanitized workbook to reproduce the portfolio view. The app recognizes the `Input Data` format.")
+    else:
+        coal = portfolio[portfolio["coal_related"].astype(str).str.casefold().isin(["ya", "y", "yes"])].copy()
+        contractors = coal[coal["coal_role"].astype(str).str.contains("kontraktor", case=False, na=False)]
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Portfolio rows", f"{len(portfolio):,}")
+        m2.metric("Coal-related", f"{len(coal):,}")
+        m3.metric("Coal contractors", f"{len(contractors):,}")
+        m4.metric("Unique contractor debtors", f"{contractors.company_name.nunique():,}")
+        summary = (coal.groupby("coal_role", dropna=False)["company_name"].nunique()
+                   .sort_values(ascending=False).rename("Unique debtors").reset_index())
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+        st.dataframe(contractors[PORTFOLIO_COLUMNS], use_container_width=True, hide_index=True, height=360)
 
-m1,m2,m3,m4=st.columns(4)
-m1.metric("Subsector",target.subsector)
-m2.metric("Portfolio status",target.portfolio_status)
-m3.metric("Candidates",len(shortlist))
-m4.metric("Data status",target.verification_status)
+with pages[1]:
+    st.subheader("Find operationally comparable companies")
+    mode = st.radio("Target input", ["Select from peer database", "Enter a new target"], horizontal=True)
+    if mode == "Select from peer database":
+        chosen = st.selectbox("Target company", sorted(master["company_name"].unique()))
+        target = master[master["company_name"] == chosen].iloc[0].to_dict()
+    else:
+        st.caption("Complete the business pattern first. The tool does not need the target to already exist in its database.")
+        target = {column: "" for column in PROFILE_COLUMNS}
+        target["company_name"] = st.text_input("Company name", "PT Bukit Makmur Mandiri Utama")
+        c1, c2 = st.columns(2)
+        target["sector"] = c1.selectbox("Sector", ["Mining & Energy"])
+        target["subsector"] = c2.selectbox("Subsector", ["Coal Mining Services", "Diversified Mining Services"])
+        target["business_role"] = "Kontraktor"
+        inputs = {
+            "service_scope": ("Service scope", "Overburden removal; Coal getting; Hauling"),
+            "primary_commodity": ("Primary commodity", "Thermal coal"),
+            "contract_profile": ("Contract profile", "Long-term; Volume based"),
+            "tariff_model": ("Tariff model", "Per bcm; Per ton"),
+            "customer_profile": ("Customer profile", "Coal mine owner"),
+            "customer_concentration": ("Customer concentration", "Medium"),
+            "geography": ("Operating geography", "Kalimantan"),
+            "fleet_model": ("Fleet model", "Owned fleet"),
+            "fuel_cost_allocation": ("Fuel-cost allocation", "Pass-through / customer supplied"),
+            "growth_stage": ("Growth stage", "Mature expansion"),
+            "growth_pattern": ("Growth pattern", "Contract-backed fleet expansion"),
+            "revenue_growth_band": ("Revenue growth band", "Moderate"),
+        }
+        cols = st.columns(2)
+        for index, (field, (label, default)) in enumerate(inputs.items()):
+            target[field] = cols[index % 2].text_input(label, default)
 
-tabs=st.tabs(["Peer shortlist","Business-pattern comparison","Why performance differs","NAK checklist","Maintain database"])
+    ranked = rank_candidates(master, target)
+    if ranked.empty:
+        st.warning("No eligible contractor peer found. Add/enrich candidates in Maintain database.")
+    else:
+        count_options = list(range(1, min(10, len(ranked)) + 1))
+        count = st.select_slider("Number of candidates", options=count_options,
+                                 value=min(5, len(ranked)))
+        shortlist = ranked.head(count)
+        view_columns = ["company_name", "subsector", "service_scope", "growth_stage",
+                        "peer_score", "data_coverage", "verification_status"]
+        st.dataframe(
+            shortlist[view_columns], use_container_width=True, hide_index=True,
+            column_config={
+                "peer_score": st.column_config.ProgressColumn("Peer score", min_value=0, max_value=100, format="%.1f"),
+                "data_coverage": st.column_config.ProgressColumn("Data coverage", min_value=0, max_value=100, format="%.1f%%"),
+            },
+        )
+        st.caption("Peer score = operational comparability. It is not a rating, financial-performance score, or credit decision.")
 
-with tabs[0]:
-    view=shortlist[["company_name","portfolio_status","subsector","peer_score","comparable_because","key_differences","verification_status"]].copy()
-    view.index=np.arange(1,len(view)+1)
-    st.dataframe(view,use_container_width=True,column_config={"peer_score":st.column_config.ProgressColumn("Comparability",min_value=0,max_value=100,format="%.1f")},height=410)
-    chart=px.bar(shortlist.sort_values("peer_score"),x="peer_score",y="company_name",orientation="h",color="portfolio_status",labels={"peer_score":"Comparability score","company_name":""},color_discrete_sequence=["#0b4d8f","#e6a700","#5e7490"])
-    chart.update_layout(template="plotly_white",legend_title="")
-    st.plotly_chart(chart,use_container_width=True)
+with pages[2]:
+    st.subheader("Explain why performance can differ")
+    if "ranked" not in locals() or ranked.empty:
+        st.info("Run Peer finder first.")
+    else:
+        selected = st.selectbox("Comparison peer", ranked.head(10)["company_name"].tolist())
+        peer = ranked[ranked["company_name"] == selected].iloc[0].to_dict()
+        score, coverage, details = peer_score(target, peer)
+        comparison = pd.DataFrame(details)
+        st.dataframe(comparison, use_container_width=True, hide_index=True)
+        differing = comparison[comparison["Match"].isin(["0%", "Need data"])]
+        st.markdown("#### CRM interpretation prompts")
+        prompts = {
+            "Service scope": "Different work scopes change equipment mix, execution risk, and achievable margin.",
+            "Contract profile": "Contract tenor, minimum volume, escalation, and penalty clauses affect earnings visibility.",
+            "Tariff / revenue model": "Different tariff bases and indexation can produce different margins despite similar volumes.",
+            "Customer concentration": "Customer/site concentration changes bargaining power and renewal risk.",
+            "Fleet / operating model": "Owned versus leased/subcontracted fleets change fixed costs, capex, and operating leverage.",
+            "Fuel-cost allocation": "Fuel pass-through versus contractor-borne fuel creates materially different cost sensitivity.",
+            "Growth stage": "Ramp-up, mature operations, or aggressive expansion create different utilization and depreciation profiles.",
+            "Growth pattern": "Contract-backed growth is structurally different from speculative fleet expansion.",
+        }
+        shown = False
+        for parameter in differing["Parameter"]:
+            if parameter in prompts:
+                st.write(f"- **{parameter}:** {prompts[parameter]}")
+                shown = True
+        if not shown:
+            st.write("The recorded patterns are broadly similar. CRM should validate volume achievement, fleet utilization, claims/penalties, and one-off project ramp-up effects.")
+        st.download_button(
+            "Download analysis workbook", excel_download(target, ranked.head(10), comparison),
+            file_name="PEARL_peer_analysis.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
-with tabs[1]:
-    selected_peer=st.selectbox("Compare with",shortlist.company_name.tolist(),key="compare_peer")
-    peer=shortlist[shortlist.company_name==selected_peer].iloc[0]
-    rows=[]
-    for field,(label,weight) in FIELDS.items():
-        rows.append({"Parameter":label,"Target":target[field],"Peer":peer[field],"Weight":f"{weight}%","Similarity":f"{similarity(target[field],peer[field]):.0f}%"})
-    st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
-    st.caption("The score indicates business-pattern comparability, not credit quality or financial performance.")
+with pages[3]:
+    st.subheader("Maintain the qualitative peer database")
+    st.write("CRM/PIC can add a company, update public-source profiles, and validate the record without changing Python code.")
+    edited = st.data_editor(master, use_container_width=True, hide_index=True, num_rows="dynamic", height=500)
+    c1, c2 = st.columns(2)
+    c1.download_button("Download updated database", edited.to_csv(index=False).encode("utf-8-sig"),
+                       file_name="peer_database.csv", mime="text/csv", use_container_width=True)
+    c2.download_button("Download blank template", pd.DataFrame(columns=PROFILE_COLUMNS).to_csv(index=False).encode("utf-8-sig"),
+                       file_name="peer_database_template.csv", mime="text/csv", use_container_width=True)
 
-with tabs[2]:
-    selected_peer_2=st.selectbox("Peer for diagnostic",shortlist.company_name.tolist(),key="diagnostic_peer")
-    peer=shortlist[shortlist.company_name==selected_peer_2].iloc[0]
-    st.markdown(f"#### Potential reasons {target_name} and {selected_peer_2} may show different margins")
-    for note in margin_explanation(target,peer): st.write("- "+note)
-    st.markdown("#### Information CRM should confirm")
-    st.write("- Actual contract mix and tariff mechanism\n- Volume achievement and fleet utilization\n- Fuel and spare-parts cost allocation\n- Mobilization and infrastructure responsibility\n- Customer/site concentration\n- One-off claims, penalties, or project ramp-up")
-
-with tabs[3]:
-    for number,question in enumerate(NAK_QUESTIONS,1): st.checkbox(f"{number}. {question}",key=f"q{number}")
-    st.download_button("Download peer analysis (Excel)",excel_output(target.to_dict(),shortlist),file_name="PEARL_Mining_Services_Peer_Analysis.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
-
-with tabs[4]:
-    st.write("Edit the table, download the result, then replace the CSV in the GitHub `data` folder. This keeps the database separate from the application code.")
-    edited=st.data_editor(df,use_container_width=True,num_rows="dynamic",height=420)
-    st.download_button("Download updated database",edited.to_csv(index=False).encode("utf-8"),file_name="mining_services_database.csv",mime="text/csv",use_container_width=True)
-    st.download_button("Download blank template",pd.DataFrame(columns=df.columns).to_csv(index=False).encode("utf-8"),file_name="mining_services_template.csv",mime="text/csv",use_container_width=True)
+with pages[4]:
+    st.subheader("Peer selection methodology")
+    method = pd.DataFrame([
+        {"Criterion": label, "Weight": f"{weight}%", "Rationale": "Operational/economic comparability"}
+        for _, (label, weight) in SCORING_FIELDS.items()
+    ])
+    st.dataframe(method, use_container_width=True, hide_index=True)
+    st.markdown("""
+    **Step 1 — eligibility:** candidate must be a mining contractor in the relevant mining-services subsector.  
+    **Step 2 — comparability:** weighted similarity of business pattern and growth characteristics.  
+    **Step 3 — CRM judgment:** review contract specifics, customer/site concentration, fleet utilization, and cost allocation.  
+    **Step 4 — financial analysis:** CRM obtains the latest statements and compares margins, leverage, cash flow, and DSCR separately.
+    """)
+    st.info("A high peer score means 'operationally comparable', not 'financially healthy'. Missing fields reduce data coverage instead of being treated as a match.")

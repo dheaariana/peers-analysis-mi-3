@@ -1,19 +1,38 @@
-# PEARL Mining Services
+# PEARL MI3 — Coal Mining Contractor Peer Finder
 
-Focused pilot for Multi Industries 3: operational peer mapping and business-pattern analysis for mining contractors/mining services.
+Focused pilot for coal-related mining services. The application combines the structure of the previous departmental portfolio database with qualitative peer-screening criteria requested by senior CRM.
 
-## What it does
+## Main improvements
 
-- Ranks candidate peers using operational characteristics rather than financial ratios.
-- Shows why companies are comparable and where their business patterns differ.
-- Produces diagnostic hypotheses for margin differences.
-- Provides a sector-specific NAK checklist.
-- Keeps the peer database in an editable CSV, separate from the Python code.
+- Imports the existing `Input Data` workbook structure for portfolio mapping.
+- Filters coal-related contractors as the pilot population.
+- Accepts any new target company through manual business-pattern profiling.
+- Selects peers based on operating model and growth pattern—not loan size or financial ratios.
+- Explains why margin/performance may differ across otherwise similar contractors.
+- Lets the PIC update the peer database without editing Python code.
+- Exports a peer shortlist and comparison workbook for CRM follow-up.
 
-## Deploy on Streamlit Community Cloud
+## Streamlit deployment
 
-Upload these four files side by side in the repository root: `app.py`, `requirements.txt`, `README.md`, and `mining_services_database.csv`. No `data` folder is required. The Streamlit main file remains `app.py`.
+Upload these four files side-by-side to the GitHub repository root:
 
-## Governance
+1. `app.py`
+2. `peer_database.csv`
+3. `requirements.txt`
+4. `README.md`
 
-All starter data is preliminary and marked Pending CRM Validation. Use public or approved information only and validate every profile against the latest NAK, company profile, contract information, or annual report.
+In Streamlit Community Cloud, select:
+
+- Repository: your repository
+- Branch: `main`
+- Main file path: `app.py`
+
+After committing the files, the existing Streamlit application normally redeploys automatically. If not, open **Manage app**, select the three-dot menu, and choose **Reboot app**.
+
+## Database governance
+
+The bundled peer profiles are illustrative and marked `Pending CRM Validation`. Replace each source and period with verified public/approved information. Do not upload confidential Bank Mandiri or debtor information to a public Streamlit deployment. For internal data, use an internally approved hosting environment or a sanitized extract.
+
+## Peer methodology
+
+Eligibility requires a comparable mining-contractor role and subsector. Weighted matching then considers service scope, commodity, contract profile, tariff model, customer profile/concentration, geography, fleet model, fuel-cost allocation, growth stage, growth pattern, and revenue-growth band. The result measures operational comparability only; CRM still obtains and analyzes the latest financial statements separately.
