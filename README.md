@@ -1,37 +1,20 @@
-# PEARL MI3 — Analisis Peer Model Bisnis
+# SIRENA MI3
 
-Versi ini fokus pada informasi kualitatif yang tidak diduplikasi oleh tools analisis laporan keuangan Bank Mandiri.
+Website monitoring berita untuk sektor Mining & Energy, Oil & Gas, Construction, Property, dan Hotel.
 
-## Prinsip
+## Deploy ke Streamlit
 
-- Tidak ada data asumsi.
-- Setiap nilai memiliki judul sumber, URL, tanggal, status, dan catatan CRM.
-- Hanya status `Sumber Resmi` dan `Terverifikasi CRM` yang dihitung.
-- Hasil scraping baru selalu berstatus `Menunggu Verifikasi CRM`.
-- Data yang tidak ditemukan dibiarkan kosong.
-- Skor kemiripan bukan rating atau keputusan kredit.
-- Satu kolom pencarian digunakan untuk seluruh perusahaan; pengguna tidak perlu memilih database atau web.
-- PEARL otomatis mengecek database, lalu mencari publikasi web jika perusahaan belum tersedia.
-- Pengguna tidak perlu memasukkan URL; pencarian halaman perusahaan dan berita dilakukan otomatis.
-- URL hasil pencarian ditampilkan sebagai tautan yang dapat langsung diklik.
-- Kolom awal dikosongkan; aplikasi tidak lagi otomatis memilih BUMA.
-- Profil hasil ekstraksi web ditampilkan bersama sumber dan selalu diberi label sementara sampai diverifikasi CRM.
+1. Upload `app.py`, `requirements.txt`, dan `README.md` ke root repository GitHub.
+2. Buka https://share.streamlit.io.
+3. Pilih repository tersebut.
+4. Isi branch dengan `main`.
+5. Isi main file path dengan `app.py`.
+6. Klik **Deploy**.
 
-## Deploy Streamlit
+Website mengambil berita publik melalui Google News RSS ketika tombol **Perbarui berita** ditekan. Cache diperbarui paling cepat setiap 30 menit.
 
-Unggah lima file berikut langsung ke root repository GitHub:
+## Catatan
 
-- `app.py`
-- `perusahaan.csv`
-- `bukti_model_bisnis.csv`
-- `requirements.txt`
-- `README.md`
-
-Branch: `main`  
-Main file path: `app.py`
-
-## Memperbarui database
-
-Gunakan menu `Pembaruan Publik`, masukkan nama perusahaan, lalu pilih sumber dari hasil pencarian otomatis. Pilih parameter dan masukkan hanya nilai yang benar-benar didukung isi sumber. Setelah CRM memverifikasi bukti pada `Kelola Database`, unduh `bukti_model_bisnis.csv` dan ganti file yang sama di GitHub.
-
-Jangan mengunggah data rahasia ke Streamlit publik.
+- Jangan memasukkan nama atau informasi debitur rahasia ke repository publik.
+- Output adalah penyaringan awal, bukan kesimpulan kredit.
+- Buka tautan berita dan validasi sumber sebelum digunakan.
